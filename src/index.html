@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Open+Sans:300,400,700" />
+  <link rel="stylesheet" href="styles.css" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Idleview</title>
+  <script type="module" src="/main.js" defer></script>
+</head>
+
+<body>
+
+
+  <aside id="card_wrapper">
+    <section class="currentTemp">
+      <span class="temp" id="temp">--&deg;</span>
+      <span class="location" id="location">...</span>
+    </section>
+    <section class="currentTimeDate">
+      <span class="temp" id="time"></span>
+      <span class="location" id="date"></span>
+    </section>
+  </aside>
+
+  <div id="weather_details_wrapper">
+    <!-- Humidity + Wind Card -->
+    <article class="card">
+      <div class="item">
+        <img src="assets/droplet.svg" alt="Humidity" class="weather-icon">
+        <div class="weather-data">
+          <span class="weather-label">Humidity</span>
+          <span class="weather-value" id="humidity">--%</span>
+        </div>
+      </div>
+      <div class="item">
+        <img src="assets/wind.svg" alt="Wind" class="weather-icon">
+        <div class="weather-data">
+          <span class="weather-label">Wind</span>
+          <span class="weather-value" id="wind">-- km/h</span>
+        </div>
+      </div>
+    </article>
+
+    <!-- Sky + Clouds Card -->
+    <article class="card">
+      <div class="item">
+        <img src="assets/umbrella.svg" alt="Sky" class="weather-icon" id="precip-icon">
+        <div class="weather-data">
+          <span class="weather-label" id="precip-label">Sky</span>
+          <span class="weather-value" id="precipitation">Clear</span>
+        </div>
+      </div>
+      <div class="item">
+        <img src="assets/cloudy.svg" alt="Clouds" class="weather-icon">
+        <div class="weather-data">
+          <span class="weather-label">Clouds</span>
+          <span class="weather-value" id="cloudiness">--%</span>
+        </div>
+      </div>
+    </article>
+
+    <!-- Sunrise/Sunset Card -->
+    <article class="card">
+      <div class="item">
+        <img src="assets/sunrise.svg" alt="Sunrise" class="weather-icon">
+        <div class="weather-data">
+          <span class="weather-label">Sunrise</span>
+          <span class="weather-value" id="sunrise">--:--</span>
+        </div>
+      </div>
+      <div class="item">
+        <img src="assets/sunset.svg" alt="Sunset" class="weather-icon">
+        <div class="weather-data">
+          <span class="weather-label">Sunset</span>
+          <span class="weather-value" id="sunset">--:--</span>
+        </div>
+      </div>
+    </article>
+
+    <!-- CPU Temperature Card (hidden on non-Linux) -->
+    <article class="card cpu-card">
+      <span class="cpu-label">CPU</span>
+      <span class="cpu-value" id="cpu-temp">--°</span>
+    </article>
+  </div>
+
+
+
+  <div id="debug">
+
+  </div>
+</body>
+
+</html>

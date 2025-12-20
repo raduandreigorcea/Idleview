@@ -422,7 +422,13 @@ async fn get_unsplash_photo(width: u32, height: u32, query: String) -> Result<Un
         .await
         .map_err(|e| format!("Failed to parse photo data: {}", e))?;
     
-    let photo_url = format!("{}?w={}&h={}&fit=crop&q=85", data.urls.regular, width, height);
+    // Add cache-busting timestamp to prevent browser/CDN caching
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis();
+    
+    let photo_url = format!("{}?w={}&h={}&fit=crop&q=85&t={}", data.urls.regular, width, height, timestamp);
     
     Ok(UnsplashPhoto {
         url: photo_url,

@@ -331,8 +331,12 @@ fetchLocation().then(() => {
     });
 });
 
-setInterval(() => fetchUnsplashPhoto(true), 30 * 60 * 1000);
+// Check photo context immediately on startup, then every 5 minutes
+checkPhotoContext();
 setInterval(checkPhotoContext, 5 * 60 * 1000);
+
+// Also set up the 30-minute forced refresh interval
+setInterval(() => fetchUnsplashPhoto(true), 30 * 60 * 1000);
 
 document.addEventListener('contextmenu', (e) => e.preventDefault());
 

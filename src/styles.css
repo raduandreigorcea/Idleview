@@ -58,6 +58,7 @@ body {
 	border-radius: var(--radius);
 	padding-block: 8vmin;
     backdrop-filter: blur(var(--glass-blur));
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.32);
     -webkit-backdrop-filter: blur(var(--glass-blur));
 }
 

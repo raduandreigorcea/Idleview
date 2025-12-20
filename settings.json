@@ -1,0 +1,18 @@
+{
+  "units": {
+    "temperature_unit": "celsius",
+    "time_format": "24h",
+    "date_format": "mdy",
+    "wind_speed_unit": "kmh"
+  },
+  "display": {
+    "show_humidity_wind": true,
+    "show_precipitation_cloudiness": true,
+    "show_sunrise_sunset": true,
+    "show_cpu_temp": false
+  },
+  "photos": {
+    "refresh_interval": 30,
+    "photo_quality": "high"
+  }
+}

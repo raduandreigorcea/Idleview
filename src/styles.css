@@ -35,6 +35,7 @@ body {
 	z-index: 30;
 	
 	width: 36vmin;
+	min-width: 200px;
 	font-family: inherit;
 	display: grid;
 	gap: 1rem;
@@ -79,6 +80,7 @@ body {
     align-items: center;
     justify-content: center;
     gap: 0.25rem;
+    overflow: hidden;
 }
 
 .temp {
@@ -97,7 +99,17 @@ body {
 
 .time {
 	font-size: 5.5vmin;
-	font-weight: 700
+	font-weight: 700;
+	white-space: nowrap;
+	width: 100%;
+	text-align: center;
+	overflow: hidden;
+	text-overflow: clip;
+}
+
+#time {
+	max-width: 100%;
+	display: inline-block;
 }
 
 .date {

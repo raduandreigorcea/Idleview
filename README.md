@@ -17,10 +17,17 @@ A beautiful, fullscreen dashboard application built with Tauri that displays the
 - **Weather Integration**: Shows cozy rain or snow photos when it's raining or snowing
 - **Powered by Unsplash**: High-quality, curated photography
 
-###  **Real-Time Information**
-- **Live Clock**: Updates every second with HH:MM format
+### 🌐 **HTTP Server & Control Panel**
+- **Built-in Web Server**: REST API for remote configuration
+- **Web Control Panel**: Beautiful, responsive interface for settings management
+- **Network Access**: Control your display from any device on your local network
+- **Real-time Updates**: Changes apply instantly via API
+- **Cross-platform Settings**: Automatic platform-specific configuration storage
+
+### **Real-Time Information**
+- **Live Clock**: Updates every second with selected format
 - **Current Date**: Clean, readable date display
-- **Local Weather**: Real-time temperature in Celsius
+- **Local Weather**: Real-time temperature in Celsius or Fahrenheit
 - **Auto-Location**: Automatically detects your location via IP
 
 ###  **Performance**
@@ -32,6 +39,7 @@ A beautiful, fullscreen dashboard application built with Tauri that displays the
 
 - **[Tauri v2](https://tauri.app/)**: Cross-platform desktop framework
 - **Rust**: Backend logic and API integration
+- **[Axum](https://docs.rs/axum/)**: High-performance HTTP server
 - **JavaScript**: Frontend interactivity
 - **HTML/CSS**: Clean, modern UI
 - **APIs**:

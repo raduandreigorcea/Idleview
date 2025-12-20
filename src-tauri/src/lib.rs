@@ -3,9 +3,33 @@ use chrono::{Datelike, Local, Timelike};
 use std::time::{SystemTime, UNIX_EPOCH};
 use rand::seq::IndexedRandom;
 
+// HTTP server modules
+pub mod settings_manager;
+pub mod http_server;
+
+// Re-export settings types from settings_manager
+use settings_manager::Settings;
+
 #[tauri::command]
 fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
+}
+
+#[tauri::command]
+fn get_settings() -> Result<Settings, String> {
+    settings_manager::read_settings()
+}
+
+#[tauri::command]
+fn save_settings(settings: Settings) -> Result<(), String> {
+    settings_manager::write_settings(&settings)
+}
+
+#[tauri::command]
+fn reset_settings() -> Result<Settings, String> {
+    let settings = Settings::default();
+    save_settings(settings.clone())?;
+    Ok(settings)
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -63,8 +87,11 @@ struct UnsplashUserLinks {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct WeatherData {
     pub temperature: f64,
+    pub temperature_unit: String,
     pub humidity: f64,
     pub wind_speed: f64,
+    pub wind_speed_unit: String,
+    pub wind_speed_label: String,
     pub cloudcover: f64,
     pub rain: f64,
     pub snowfall: f64,
@@ -168,6 +195,8 @@ async fn get_location() -> Result<Location, String> {
 
 #[tauri::command]
 async fn get_weather(latitude: f64, longitude: f64) -> Result<WeatherData, String> {
+    let settings = get_settings().unwrap_or_default();
+    
     let url = format!(
         "https://api.open-meteo.com/v1/forecast?latitude={}&longitude={}&current=temperature_2m,relative_humidity_2m,rain,snowfall,cloudcover,wind_speed_10m&daily=sunrise,sunset&timezone=auto",
         latitude, longitude
@@ -182,10 +211,33 @@ async fn get_weather(latitude: f64, longitude: f64) -> Result<WeatherData, Strin
         .await
         .map_err(|e| format!("Failed to parse weather data: {}", e))?;
     
+    // Convert temperature based on user settings
+    let temperature = match settings.units.temperature_unit.as_str() {
+        "fahrenheit" => data.current.temperature_2m * 9.0 / 5.0 + 32.0,
+        _ => data.current.temperature_2m, // celsius is default
+    };
+    
+    // Convert wind speed based on user settings
+    let wind_speed = match settings.units.wind_speed_unit.as_str() {
+        "mph" => data.current.wind_speed_10m * 0.621371,
+        "ms" => data.current.wind_speed_10m / 3.6,
+        _ => data.current.wind_speed_10m, // kmh is default
+    };
+    
+    // Get wind speed label
+    let wind_speed_label = match settings.units.wind_speed_unit.as_str() {
+        "mph" => "mph",
+        "ms" => "m/s",
+        _ => "km/h",
+    }.to_string();
+    
     Ok(WeatherData {
-        temperature: data.current.temperature_2m,
+        temperature,
+        temperature_unit: settings.units.temperature_unit.clone(),
         humidity: data.current.relative_humidity_2m,
-        wind_speed: data.current.wind_speed_10m,
+        wind_speed,
+        wind_speed_unit: settings.units.wind_speed_unit.clone(),
+        wind_speed_label,
         cloudcover: data.current.cloudcover,
         rain: data.current.rain,
         snowfall: data.current.snowfall,
@@ -428,7 +480,15 @@ async fn get_unsplash_photo(width: u32, height: u32, query: String) -> Result<Un
         .unwrap()
         .as_millis();
     
-    let photo_url = format!("{}?w={}&h={}&fit=crop&q=85&t={}", data.urls.regular, width, height, timestamp);
+    // Apply photo quality setting
+    let settings = get_settings().unwrap_or_default();
+    let quality = match settings.photos.photo_quality.as_str() {
+        "low" => 60,
+        "medium" => 75,
+        _ => 85, // high is default
+    };
+    
+    let photo_url = format!("{}?w={}&h={}&fit=crop&q={}&t={}", data.urls.regular, width, height, quality, timestamp);
     
     Ok(UnsplashPhoto {
         url: photo_url,
@@ -454,8 +514,14 @@ async fn trigger_unsplash_download(download_url: String) -> Result<(), String> {
     Ok(())
 }
 
+#[derive(Debug, Serialize)]
+pub struct CpuTemp {
+    pub value: f32,
+    pub display: String,
+}
+
 #[tauri::command]
-fn get_cpu_temp() -> Result<f32, String> {
+fn get_cpu_temp() -> Result<CpuTemp, String> {
     #[cfg(target_os = "linux")]
     {
         match std::fs::read_to_string("/sys/class/thermal/thermal_zone0/temp") {
@@ -463,36 +529,84 @@ fn get_cpu_temp() -> Result<f32, String> {
                 let temp_millidegrees: i32 = contents.trim()
                     .parse()
                     .map_err(|e| format!("Failed to parse temperature: {}", e))?;
-                Ok(temp_millidegrees as f32 / 1000.0)
+                let temp_celsius = temp_millidegrees as f32 / 1000.0;
+                
+                if temp_celsius <= 0.0 {
+                    return Ok(CpuTemp {
+                        value: 0.0,
+                        display: String::new(),
+                    });
+                }
+                
+                // Get settings for unit conversion
+                let settings = get_settings().unwrap_or_default();
+                let (display_temp, unit) = if settings.units.temperature_unit == "fahrenheit" {
+                    (temp_celsius * 9.0 / 5.0 + 32.0, "°F")
+                } else {
+                    (temp_celsius, "°C")
+                };
+                
+                Ok(CpuTemp {
+                    value: temp_celsius,
+                    display: format!("{} {}", display_temp.round() as i32, unit),
+                })
             }
-            Err(_) => Ok(0.0)
+            Err(_) => Ok(CpuTemp {
+                value: 0.0,
+                display: String::new(),
+            })
         }
     }
     
     #[cfg(not(target_os = "linux"))]
     {
-        Ok(0.0)
+        Ok(CpuTemp {
+            value: 0.0,
+            display: String::new(),
+        })
     }
 }
 
 #[tauri::command]
 fn get_current_time() -> FormattedTime {
+    let settings = get_settings().unwrap_or_default();
     let now = Local::now();
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_millis() as u64;
     
-    let time = format!("{:02}:{:02}", now.hour(), now.minute());
+    // Format time based on user settings
+    let time = match settings.units.time_format.as_str() {
+        "12h" => {
+            let hour = now.hour();
+            let (hour_12, am_pm) = if hour == 0 {
+                (12, "AM")
+            } else if hour < 12 {
+                (hour, "AM")
+            } else if hour == 12 {
+                (12, "PM")
+            } else {
+                (hour - 12, "PM")
+            };
+            format!("{:02}:{:02} {}", hour_12, now.minute(), am_pm)
+        },
+        _ => format!("{:02}:{:02}", now.hour(), now.minute()), // 24h is default
+    };
     
     // Get full day name and convert to uppercase (FRIDAY, MONDAY, etc.)
     let day_of_week = now.format("%A").to_string().to_uppercase();
     
-    // Format date as "NOV 28, 2025"
+    // Format date based on user settings
     let month = now.format("%b").to_string().to_uppercase();
     let day = now.day();
     let year = now.year();
-    let date = format!("{} {}, {}", month, day, year);
+    
+    let date = match settings.units.date_format.as_str() {
+        "dmy" => format!("{} {}, {}", day, month, year),
+        "ymd" => format!("{} {} {}", year, month, day),
+        _ => format!("{} {}, {}", month, day, year), // mdy is default
+    };
     
     FormattedTime {
         time,
@@ -527,6 +641,7 @@ fn get_precipitation_display(weather: WeatherData) -> PrecipitationDisplay {
 
 #[tauri::command]
 fn is_cache_valid(cache_timestamp: u64) -> bool {
+    let settings = get_settings().unwrap_or_default();
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
@@ -534,9 +649,9 @@ fn is_cache_valid(cache_timestamp: u64) -> bool {
     
     // Use saturating_sub to avoid overflow
     let cache_age = now.saturating_sub(cache_timestamp);
-    let thirty_minutes = 30 * 60 * 1000;
+    let refresh_interval = settings.photos.refresh_interval * 60 * 1000;
     
-    cache_age < thirty_minutes
+    cache_age < refresh_interval
 }
 
 #[tauri::command]
@@ -613,6 +728,16 @@ pub fn run() {
     // Load .env file if it exists
     let _ = dotenvy::dotenv();
     
+    // Start HTTP server in a separate thread
+    std::thread::spawn(|| {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            if let Err(e) = http_server::start_server(8737).await {
+                eprintln!("HTTP server error: {}", e);
+            }
+        });
+    });
+    
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
@@ -631,6 +756,9 @@ pub fn run() {
             is_cache_valid,
             format_time_remaining,
             get_debug_info,
+            get_settings,
+            save_settings,
+            reset_settings,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

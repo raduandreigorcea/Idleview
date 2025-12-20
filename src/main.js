@@ -8,12 +8,15 @@ let currentWeather = null;
 let currentPhotoUrl = null;
 let debugInterval = null;
 let prefetchedPhoto = null; // Store prefetched photo
+let userSettings = null; // Store user settings
 
 // Update weather display
 function updateWeatherDisplay(weather) {
-    document.getElementById('temp').textContent = `${Math.round(weather.temperature)}° C`;
+    const tempUnit = weather.temperature_unit === 'fahrenheit' ? '°F' : '°C';
+    document.getElementById('temp').textContent = `${Math.round(weather.temperature)} ${tempUnit}`;
+    
     document.getElementById('humidity').textContent = `${weather.humidity}%`;
-    document.getElementById('wind').textContent = `${Math.round(weather.wind_speed)} km/h`;
+    document.getElementById('wind').textContent = `${Math.round(weather.wind_speed)} ${weather.wind_speed_label}`;
     document.getElementById('cloudiness').textContent = `${weather.cloudcover}%`;
 
     // Update precipitation using Rust logic
@@ -23,19 +26,15 @@ function updateWeatherDisplay(weather) {
         document.getElementById('precipitation').textContent = precip.value;
     });
 
-    // Update sunrise/sunset
+    // Update sunrise/sunset (use 12h or 24h based on settings)
     const sunrise = new Date(weather.sunrise);
     const sunset = new Date(weather.sunset);
-    document.getElementById('sunrise').textContent = sunrise.toLocaleTimeString('en-US', { 
-        hour: '2-digit', 
-        minute: '2-digit', 
-        hour12: false 
-    });
-    document.getElementById('sunset').textContent = sunset.toLocaleTimeString('en-US', { 
-        hour: '2-digit', 
-        minute: '2-digit', 
-        hour12: false 
-    });
+    const timeFormat = userSettings?.units?.time_format === '12h' 
+        ? { hour: '2-digit', minute: '2-digit', hour12: true }
+        : { hour: '2-digit', minute: '2-digit', hour12: false };
+    
+    document.getElementById('sunrise').textContent = sunrise.toLocaleTimeString('en-US', timeFormat);
+    document.getElementById('sunset').textContent = sunset.toLocaleTimeString('en-US', timeFormat);
 
     currentWeather = weather;
 }
@@ -70,12 +69,18 @@ async function updateWeather(location) {
 
 // Update CPU temperature
 async function updateCPUTemp() {
+    // Check if CPU temp should be shown in settings
+    if (userSettings && !userSettings.display.show_cpu_temp) {
+        document.querySelector('.cpu-card').style.display = 'none';
+        return;
+    }
+    
     try {
         const temp = await invoke('get_cpu_temp');
         const cpuCard = document.querySelector('.cpu-card');
         
-        if (temp > 0) {
-            document.getElementById('cpu-temp').textContent = `${Math.round(temp)}°C`;
+        if (temp.value > 0) {
+            document.getElementById('cpu-temp').textContent = temp.display;
             cpuCard.style.display = 'flex';
         } else {
             cpuCard.style.display = 'none';
@@ -90,11 +95,96 @@ async function updateCPUTemp() {
 async function updateTimeAndDate() {
     try {
         const timeData = await invoke('get_current_time');
-        document.getElementById('time').textContent = timeData.time;
+        const timeElement = document.getElementById('time');
+        timeElement.textContent = timeData.time;
+        
+        // Adjust font size for 12h format to prevent wrapping
+        if (userSettings?.units?.time_format === '12h') {
+            timeElement.style.fontSize = '7vmin';
+        } else {
+            timeElement.style.fontSize = '9vmin';
+        }
+        
         document.getElementById('date').innerHTML = `${timeData.day_of_week}<br>${timeData.date}`;
     } catch (error) {
         console.error('Failed to update time:', error);
     }
+}
+
+// Load and apply user settings
+async function loadSettings() {
+    try {
+        userSettings = await invoke('get_settings');
+        console.log('Settings loaded:', userSettings);
+        applyDisplaySettings();
+    } catch (error) {
+        console.error('Failed to load settings:', error);
+        // Use defaults if settings fail to load
+        userSettings = {
+            units: {
+                temperature_unit: 'celsius',
+                time_format: '24h',
+                date_format: 'mdy',
+                wind_speed_unit: 'kmh'
+            },
+            display: {
+                show_humidity_wind: true,
+                show_precipitation_cloudiness: true,
+                show_sunrise_sunset: true,
+                show_cpu_temp: true
+            },
+            photos: {
+                refresh_interval: 30,
+                photo_quality: 'high'
+            }
+        };
+    }
+}
+
+// Reload settings and refresh UI
+async function reloadSettings() {
+    console.log('🔄 Reloading settings...');
+    await loadSettings();
+    
+    // Refresh all UI elements with new settings
+    if (window.userLocation) {
+        await updateWeather(window.userLocation);
+    }
+    await updateTimeAndDate();
+    await updateCPUTemp();
+    
+    console.log('✅ Settings reloaded and UI updated!');
+}
+
+// Check for settings changes periodically
+async function checkSettingsChanges() {
+    try {
+        const newSettings = await invoke('get_settings');
+        const settingsChanged = JSON.stringify(newSettings) !== JSON.stringify(userSettings);
+        
+        if (settingsChanged) {
+            console.log('⚠️ Settings file changed, reloading...');
+            await reloadSettings();
+        }
+    } catch (error) {
+        console.error('Failed to check settings:', error);
+    }
+}
+
+// Apply display settings to show/hide cards
+function applyDisplaySettings() {
+    if (!userSettings) return;
+    
+    const weatherCards = document.querySelectorAll('#weather_details_wrapper .card');
+    
+    // Card order: [Humidity+Wind], [Precipitation+Cloudiness], [Sunrise+Sunset], [CPU]
+    if (weatherCards.length >= 3) {
+        weatherCards[0].style.display = userSettings.display.show_humidity_wind ? 'grid' : 'none';
+        weatherCards[1].style.display = userSettings.display.show_precipitation_cloudiness ? 'grid' : 'none';
+        weatherCards[2].style.display = userSettings.display.show_sunrise_sunset ? 'grid' : 'none';
+    }
+    
+    // CPU card visibility is handled in updateCPUTemp()
 }
 
 // Cache helpers
@@ -119,7 +209,28 @@ function cachePhoto(photo, query) {
 async function displayPhoto(photo, timestamp = null, query = null) {
     currentPhotoUrl = photo.url;
     
-    // Apply background image
+    // Preload the image to ensure it's fully loaded before displaying
+    const img = new Image();
+    
+    // Wait for image to fully load and decode
+    await new Promise((resolve, reject) => {
+        img.onload = () => {
+            // Use decode() for better performance if available
+            if (img.decode) {
+                img.decode()
+                    .then(resolve)
+                    .catch(() => resolve()); // Fallback if decode fails
+            } else {
+                resolve();
+            }
+        };
+        img.onerror = reject;
+        img.src = photo.url;
+    }).catch(err => {
+        console.error('Failed to load photo:', err);
+    });
+    
+    // Now apply the background - image is fully loaded and decoded
     document.body.style.backgroundImage = `url('${photo.url}')`;
     document.body.style.backgroundSize = 'cover';
     document.body.style.backgroundRepeat = 'no-repeat';
@@ -292,22 +403,24 @@ async function checkPhotoContext() {
     try {
         const now = Date.now();
         const cacheAge = now - cached.timestamp;
-        const twentyNineMinutes = 29 * 60 * 1000; // 29 minutes
-        const thirtyMinutes = 30 * 60 * 1000; // 30 minutes
         
-        // At 29 minutes (1 min before expiry), prefetch the next photo
-        if (cacheAge >= twentyNineMinutes && cacheAge < thirtyMinutes && !prefetchedPhoto) {
-            console.log('Cache at 29min, prefetching next photo...');
+        // Get photo refresh interval from settings (convert minutes to milliseconds)
+        const refreshInterval = (userSettings?.photos?.refresh_interval || 30) * 60 * 1000;
+        const prefetchTime = refreshInterval - (1 * 60 * 1000); // 1 minute before expiry
+        
+        // Prefetch before expiry
+        if (cacheAge >= prefetchTime && cacheAge < refreshInterval && !prefetchedPhoto) {
+            console.log(`Cache at ${Math.floor(cacheAge / 60000)}min, prefetching next photo...`);
             await prefetchNextPhoto();
         }
         
-        // At 30 minutes, switch to the prefetched photo (or fetch if prefetch failed)
+        // Switch to new photo when cache expires
         const isValid = await invoke('is_cache_valid', { 
             cacheTimestamp: cached.timestamp 
         });
         
         if (!isValid) {
-            console.log('Cache expired (30min), switching to new photo...');
+            console.log(`Cache expired (${userSettings?.photos?.refresh_interval || 30}min), switching to new photo...`);
             await fetchUnsplashPhoto(true); // Will use prefetched if available
         }
     } catch (error) {
@@ -316,37 +429,44 @@ async function checkPhotoContext() {
 }
 
 // Initialize
-updateTimeAndDate();
-setInterval(updateTimeAndDate, 1000);
+(async function init() {
+    await loadSettings();
+    
+    updateTimeAndDate();
+    setInterval(updateTimeAndDate, 1000);
 
-updateCPUTemp();
-setInterval(updateCPUTemp, 10 * 1000);
+    updateCPUTemp();
+    setInterval(updateCPUTemp, 10 * 1000);
 
-// Set up intervals - store location for weather updates
-let userLocation = null;
-fetchLocation().then(() => {
-    invoke('get_location').then(location => {
-        userLocation = location;
-        setInterval(() => updateWeather(userLocation), 15 * 60 * 1000);
+    // Set up intervals - store location for weather updates
+    window.userLocation = null;
+    fetchLocation().then(() => {
+        invoke('get_location').then(location => {
+            window.userLocation = location;
+            setInterval(() => updateWeather(window.userLocation), 15 * 60 * 1000);
+        });
     });
-});
 
-// Check photo context immediately on startup, then every 5 minutes
-checkPhotoContext();
-setInterval(checkPhotoContext, 5 * 60 * 1000);
+    // Check photo context immediately on startup, then every 5 minutes
+    checkPhotoContext();
+    setInterval(checkPhotoContext, 5 * 60 * 1000);
+    
+    // Check for settings changes every 500ms for faster response
+    setInterval(checkSettingsChanges, 500);
 
-// Also set up the 30-minute forced refresh interval
-setInterval(() => fetchUnsplashPhoto(true), 30 * 60 * 1000);
-
-document.addEventListener('contextmenu', (e) => e.preventDefault());
+    document.addEventListener('contextmenu', (e) => e.preventDefault());
+    
+    // Apply display settings after a short delay to ensure DOM is ready
+    setTimeout(applyDisplaySettings, 100);
+})();
 
 // Console command to refresh photo
 window.refreshPhoto = async function() {
     console.log('🔄 Manually refreshing photo...');
     try {
-        if (!currentWeather && userLocation) {
+        if (!currentWeather && window.userLocation) {
             console.log('⚠️ Weather not loaded yet, fetching weather first...');
-            await updateWeather(userLocation);
+            await updateWeather(window.userLocation);
         }
         
         console.log('📸 Fetching new photo with current context...');
@@ -357,4 +477,51 @@ window.refreshPhoto = async function() {
     }
 };
 
+// Console command to get settings
+window.getSettings = async function() {
+    try {
+        const settings = await invoke('get_settings');
+        console.log('Current settings:', settings);
+        return settings;
+    } catch (error) {
+        console.error('❌ Failed to get settings:', error);
+    }
+};
+
+// Console command to save settings
+window.saveSettings = async function(settings) {
+    try {
+        await invoke('save_settings', { settings });
+        // Settings will be automatically reloaded by the checkSettingsChanges interval
+        console.log('✅ Settings saved! Changes will apply automatically...');
+        return true;
+    } catch (error) {
+        console.error('❌ Failed to save settings:', error);
+        return false;
+    }
+};
+
+// Console command to reset settings
+window.resetSettings = async function() {
+    try {
+        const settings = await invoke('reset_settings');
+        // Settings will be automatically reloaded by the checkSettingsChanges interval
+        console.log('✅ Settings reset to defaults! Changes will apply automatically...', settings);
+        return settings;
+    } catch (error) {
+        console.error('❌ Failed to reset settings:', error);
+    }
+};
+
+// Console command to manually reload settings
+window.reloadSettings = reloadSettings;
+
+// Listen for photo refresh events from HTTP API
+const { listen } = window.__TAURI__.event;
+listen('refresh-photo', async () => {
+    console.log('🔔 Photo refresh event received from API');
+    await window.refreshPhoto();
+});
+
 console.log('💡 Tip: Type refreshPhoto() in console to fetch a new background photo');
+console.log('💡 Available commands: getSettings(), saveSettings(settings), resetSettings(), reloadSettings()');

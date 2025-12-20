@@ -31,8 +31,7 @@ dist-ssr
 installers
 
 # Docker build files (internal use only)
-Dockerfile
-Dockerfile.arm64
-Dockerfile.arm32
-.dockerignore
-build-linux.ps1
+linux-build
+
+test-api.ps1
+build-all.ps1

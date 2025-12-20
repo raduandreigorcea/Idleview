@@ -36,4 +36,3 @@ Dockerfile.arm64
 Dockerfile.arm32
 .dockerignore
 build-linux.ps1
-build-linux.sh

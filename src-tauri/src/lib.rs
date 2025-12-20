@@ -392,8 +392,8 @@ fn build_photo_query(
 
 #[tauri::command]
 async fn get_unsplash_photo(width: u32, height: u32, query: String) -> Result<UnsplashPhoto, String> {
-    let access_key = option_env!("UNSPLASH_ACCESS_KEY")
-        .unwrap_or("YOUR_UNSPLASH_ACCESS_KEY");
+    let access_key = std::env::var("UNSPLASH_ACCESS_KEY")
+        .unwrap_or_else(|_| "YOUR_UNSPLASH_ACCESS_KEY".to_string());
     
     let url = format!(
         "https://api.unsplash.com/photos/random?orientation=landscape&query={}&w={}&h={}",
@@ -434,8 +434,8 @@ async fn get_unsplash_photo(width: u32, height: u32, query: String) -> Result<Un
 
 #[tauri::command]
 async fn trigger_unsplash_download(download_url: String) -> Result<(), String> {
-    let access_key = option_env!("UNSPLASH_ACCESS_KEY")
-        .unwrap_or("YOUR_UNSPLASH_ACCESS_KEY");
+    let access_key = std::env::var("UNSPLASH_ACCESS_KEY")
+        .unwrap_or_else(|_| "YOUR_UNSPLASH_ACCESS_KEY".to_string());
     
     let client = reqwest::Client::new();
     let _response = client
@@ -604,6 +604,8 @@ fn get_debug_info(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Load .env file if it exists
+    let _ = dotenvy::dotenv();
     
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())

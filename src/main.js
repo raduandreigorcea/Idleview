@@ -319,8 +319,6 @@ async function checkPhotoContext() {
 updateTimeAndDate();
 setInterval(updateTimeAndDate, 1000);
 
-fetchLocation();
-
 updateCPUTemp();
 setInterval(updateCPUTemp, 10 * 1000);
 

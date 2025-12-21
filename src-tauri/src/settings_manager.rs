@@ -24,6 +24,12 @@ pub struct DisplaySettings {
     pub show_precipitation_cloudiness: bool,
     pub show_sunrise_sunset: bool,
     pub show_cpu_temp: bool,
+    #[serde(default = "default_theme")]
+    pub theme: String,  // "default", "nest"
+}
+
+fn default_theme() -> String {
+    "default".to_string()
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -89,6 +95,7 @@ impl Default for Settings {
                 show_precipitation_cloudiness: true,
                 show_sunrise_sunset: true,
                 show_cpu_temp: false,
+                theme: "default".to_string(),
             },
             photos: PhotosSettings {
                 refresh_interval: 30,

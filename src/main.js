@@ -131,7 +131,8 @@ async function loadSettings() {
                 show_humidity_wind: true,
                 show_precipitation_cloudiness: true,
                 show_sunrise_sunset: true,
-                show_cpu_temp: true
+                show_cpu_temp: true,
+                theme: 'default'
             },
             photos: {
                 refresh_interval: 30,
@@ -156,24 +157,15 @@ async function reloadSettings() {
     console.log('✅ Settings reloaded and UI updated!');
 }
 
-// Check for settings changes periodically
-async function checkSettingsChanges() {
-    try {
-        const newSettings = await invoke('get_settings');
-        const settingsChanged = JSON.stringify(newSettings) !== JSON.stringify(userSettings);
-        
-        if (settingsChanged) {
-            console.log('⚠️ Settings file changed, reloading...');
-            await reloadSettings();
-        }
-    } catch (error) {
-        console.error('Failed to check settings:', error);
-    }
-}
+// Settings changes are now handled via 'settings-updated' events from the HTTP server
+// This eliminates the need for polling and improves performance
 
 // Apply display settings to show/hide cards
 function applyDisplaySettings() {
     if (!userSettings) return;
+    
+    // Apply theme
+    applyTheme(userSettings.display.theme || 'default');
     
     const weatherCards = document.querySelectorAll('#weather_details_wrapper .card');
     
@@ -203,6 +195,15 @@ function cachePhoto(photo, query) {
         query: query,
         timestamp: Date.now()
     }));
+}
+
+// Apply theme to body element
+function applyTheme(themeName) {
+    const currentTheme = document.body.getAttribute('data-theme');
+    if (currentTheme !== themeName) {
+        document.body.setAttribute('data-theme', themeName);
+        console.log(`🎨 Theme applied: ${themeName}`);
+    }
 }
 
 // Display photo
@@ -453,8 +454,11 @@ async function checkPhotoContext() {
     checkPhotoContext();
     setInterval(checkPhotoContext, 30 * 1000);
     
-    // Check for settings changes every 500ms for faster response
-    setInterval(checkSettingsChanges, 500);
+    // Listen for settings updates from HTTP API instead of polling
+    await window.__TAURI__.event.listen('settings-updated', async (event) => {
+        console.log('⚡ Settings updated via API, reloading...');
+        await reloadSettings();
+    });
 
     document.addEventListener('contextmenu', (e) => e.preventDefault());
     
@@ -518,6 +522,21 @@ window.resetSettings = async function() {
 // Console command to manually reload settings
 window.reloadSettings = reloadSettings;
 
+// Console command to change theme
+window.setTheme = async function(themeName) {
+    try {
+        const settings = await invoke('get_settings');
+        settings.display.theme = themeName;
+        await invoke('save_settings', { settings });
+        console.log(`✅ Theme changed to: ${themeName}`);
+        await reloadSettings();
+        return true;
+    } catch (error) {
+        console.error('❌ Failed to change theme:', error);
+        return false;
+    }
+};
+
 // Listen for photo refresh events from HTTP API
 const { listen } = window.__TAURI__.event;
 listen('refresh-photo', async () => {
@@ -526,4 +545,5 @@ listen('refresh-photo', async () => {
 });
 
 console.log('%c🎨 Idleview Debug Console', 'font-size: 14px; font-weight: bold; color: #4f46e5');
-console.log('%cCommands: refreshPhoto() | getSettings() | saveSettings(obj) | resetSettings() | reloadSettings()', 'color: #64748b');
+console.log('%cCommands: refreshPhoto() | getSettings() | saveSettings(obj) | resetSettings() | reloadSettings() | setTheme(name)', 'color: #64748b');
+console.log('%cThemes: "default" | "nest" | "apple" | "clean"', 'color: #64748b');

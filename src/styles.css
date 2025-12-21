@@ -1,5 +1,7 @@
 @import url("https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Product+Sans:wght@400;500;700&display=swap");
 
+/* Default Theme */
 :root {
 	--bg-overlay: rgba(0, 0, 0, 0.22);
 	--card-bg: rgba(20, 18, 16, 0.46);
@@ -9,6 +11,370 @@
 	--radius: 16px;
 	--weather-card-height: 15vmin;
 	--card-font-size: 2vmin;
+	--font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial;
+	--temp-font-weight: 300;
+	--label-font-weight: 700;
+}
+
+/* Google Nest Theme - Clean, centered time display */
+body[data-theme="nest"] {
+	--card-bg: rgba(0, 0, 0, 0.25);
+	--card-bg-strong: rgba(0, 0, 0, 0.35);
+	--muted: rgba(255, 255, 255, 1);
+	--glass-blur: 20px;
+	--radius: 20px;
+	--font-family: 'Product Sans', 'Google Sans', 'Roboto', system-ui, sans-serif;
+	--temp-font-weight: 300;
+	--label-font-weight: 400;
+}
+
+body[data-theme="nest"] * {
+	position: relative;
+	z-index: 2;
+}
+
+/* Nest: Reposition main card wrapper to bottom-left */
+body[data-theme="nest"] #card_wrapper {
+	position: fixed;
+	top: auto;
+	bottom: 3rem;
+	left: 3rem;
+	transform: none;
+	width: auto;
+	min-width: auto;
+	right: auto;
+	display: flex;
+	flex-direction: column;
+	gap: 0.75rem;
+	align-items: flex-start;
+}
+
+/* Nest: Make time/date card minimal with subtle background */
+body[data-theme="nest"] .currentTimeDate {
+	background: rgba(0, 0, 0, 0.25);
+	backdrop-filter: blur(12px);
+	box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+	padding: 1.5rem 2rem;
+	height: auto;
+	border-radius: 16px;
+	align-items: center;
+	justify-content: center;
+	gap: 0.3rem;
+}
+
+body[data-theme="nest"] .currentTimeDate .temp {
+	font-size: 9vmin;
+	font-weight: 300;
+	letter-spacing: -0.02em;
+	text-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+	line-height: 1;
+}
+
+body[data-theme="nest"] .currentTimeDate .location {
+	font-size: 2.4vmin;
+	font-weight: 400;
+	opacity: 0.9;
+	letter-spacing: 0.03em;
+	text-transform: none;
+	text-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+	margin-top: 0;
+}
+
+/* Nest: Temperature card - compact with background */
+body[data-theme="nest"] .currentTemp {
+	background: rgba(0, 0, 0, 0.25);
+	backdrop-filter: blur(12px);
+	box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+	padding: 1rem 1.5rem;
+	height: auto;
+	border-radius: 16px;
+	justify-content: center;
+	align-items: center;
+	gap: 0.25rem;
+	order: -1; /* Move above time card */
+}
+
+body[data-theme="nest"] .currentTemp .temp {
+	font-size: 5vmin;
+	font-weight: 300;
+	text-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+	line-height: 1;
+}
+
+body[data-theme="nest"] .currentTemp .location {
+	font-size: 2vmin;
+	font-weight: 400;
+	text-transform: capitalize;
+	opacity: 0.85;
+	text-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+	margin-top: 0;
+}
+
+/* Nest: Weather cards - compact row at top-right */
+body[data-theme="nest"] #weather_details_wrapper {
+	position: fixed;
+	top: 2rem;
+	right: 2rem;
+	bottom: auto;
+	left: auto;
+	transform: none;
+	display: flex;
+	flex-direction: row;
+	flex-wrap: wrap;
+	gap: 0.6rem;
+	max-width: 50%;
+	justify-content: flex-end;
+}
+
+body[data-theme="nest"] .card {
+	background: rgba(0, 0, 0, 0.25);
+	backdrop-filter: blur(12px);
+	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+	padding: 0.6rem 0.9rem;
+	border-radius: 12px;
+	flex: 0 1 auto;
+}
+
+body[data-theme="nest"] .card .item {
+	gap: 0.6rem;
+	flex-direction: row;
+}
+
+body[data-theme="nest"] .card .dual-item {
+	gap: 0.3rem;
+}
+
+body[data-theme="nest"] .weather-icon {
+	width: 1.6em;
+	height: 1.6em;
+	opacity: 0.9;
+}
+
+body[data-theme="nest"] .weather-label {
+	font-size: 0.75em;
+	color: rgba(255, 255, 255, 0.8);
+	font-weight: 400;
+	letter-spacing: 0.02em;
+	text-transform: uppercase;
+}
+
+body[data-theme="nest"] .weather-value {
+	font-size: 1.1em;
+	font-weight: 500;
+	color: rgba(255, 255, 255, 1);
+	text-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+}
+
+/* Nest: Photo credit styling */
+body[data-theme="nest"] #photo-credit {
+	background: rgba(0, 0, 0, 0.2);
+	color: rgba(255, 255, 255, 0.6);
+	backdrop-filter: blur(8px);
+	bottom: 1rem;
+	right: 1rem;
+}
+
+/* Apple Liquid Glass Theme - Vibrant, frosted glass aesthetic */
+body[data-theme="apple"] {
+	--card-bg: rgba(255, 255, 255, 0.15);
+	--card-bg-strong: rgba(255, 255, 255, 0.25);
+	--muted: rgba(255, 255, 255, 1);
+	--glass-blur: 60px;
+	--radius: 24px;
+	--font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', system-ui, sans-serif;
+	--temp-font-weight: 200;
+	--label-font-weight: 500;
+}
+
+body[data-theme="apple"] * {
+	position: relative;
+	z-index: 2;
+}
+
+/* Apple: Compact cards at top center */
+body[data-theme="apple"] #card_wrapper {
+	top: 2rem;
+	left: 50%;
+	right: auto;
+	transform: translateX(-50%);
+	width: auto;
+	min-width: auto;
+	display: flex;
+	flex-direction: row;
+	gap: 1rem;
+}
+
+/* Apple: Compact temperature card */
+body[data-theme="apple"] .currentTemp {
+	background: rgba(255, 255, 255, 0.18);
+	backdrop-filter: blur(60px) saturate(180%);
+	-webkit-backdrop-filter: blur(60px) saturate(180%);
+	box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1),
+	            inset 0 1px 0 rgba(255, 255, 255, 0.3);
+	border: 1px solid rgba(255, 255, 255, 0.08);
+	height: auto;
+	padding: 1rem 1.5rem;
+	width: auto;
+	min-width: 140px;
+}
+
+body[data-theme="apple"] .currentTemp .temp {
+	font-size: 5vmin;
+}
+
+body[data-theme="apple"] .currentTemp .location {
+	font-size: 1.8vmin;
+}
+
+/* Apple: Compact time/date card */
+body[data-theme="apple"] .currentTimeDate {
+	background: rgba(255, 255, 255, 0.15);
+	backdrop-filter: blur(60px) saturate(180%);
+	-webkit-backdrop-filter: blur(60px) saturate(180%);
+	box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1),
+	            inset 0 1px 0 rgba(255, 255, 255, 0.3);
+	border: 1px solid rgba(255, 255, 255, 0.08);
+	height: auto;
+	padding: 1rem 1.5rem;
+	width: auto;
+	min-width: 160px;
+}
+
+body[data-theme="apple"] .currentTimeDate .temp {
+	font-size: 5.5vmin;
+}
+
+body[data-theme="apple"] .currentTimeDate .location {
+	font-size: 2vmin;
+}
+
+body[data-theme="apple"] .temp {
+	font-weight: 200;
+	letter-spacing: -0.03em;
+	text-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
+}
+
+body[data-theme="apple"] .location {
+	font-weight: 500;
+	letter-spacing: 0.02em;
+	text-shadow: 0 1px 6px rgba(0, 0, 0, 0.1);
+}
+
+/* Apple: Compact weather cards at bottom center */
+body[data-theme="apple"] #weather_details_wrapper {
+	bottom: 2rem;
+	left: 50%;
+	transform: translateX(-50%);
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+	gap: 0.8rem;
+	max-width: 600px;
+}
+
+body[data-theme="apple"] .card {
+	background: rgba(255, 255, 255, 0.12);
+	backdrop-filter: blur(60px) saturate(180%);
+	-webkit-backdrop-filter: blur(60px) saturate(180%);
+	box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1),
+	            inset 0 1px 0 rgba(255, 255, 255, 0.3);
+	border: 1px solid rgba(255, 255, 255, 0.08);
+	border-radius: 20px;
+	padding: 1rem 1.3rem;
+	min-width: 160px;
+}
+
+body[data-theme="apple"] .weather-label {
+	font-size: 0.8em;
+	color: rgba(255, 255, 255, 0.95);
+	font-weight: 500;
+	letter-spacing: 0.03em;
+}
+
+body[data-theme="apple"] .weather-value {
+	font-size: 1.15em;
+	font-weight: 400;
+	color: rgba(255, 255, 255, 1);
+	text-shadow: 0 1px 4px rgba(0, 0, 0, 0.1);
+}
+
+body[data-theme="apple"] .weather-icon {
+	filter: brightness(0) invert(1) drop-shadow(0 1px 3px rgba(0, 0, 0, 0.15));
+}
+
+/* Apple: Elegant photo credit */
+body[data-theme="apple"] #photo-credit {
+	background: rgba(255, 255, 255, 0.12);
+	color: rgba(255, 255, 255, 0.8);
+	backdrop-filter: blur(40px) saturate(180%);
+	border: 1px solid rgba(255, 255, 255, 0.06);
+	box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+}
+
+/* Clean Theme - No cards, just typography with subtle shadows */
+body[data-theme="clean"] #card_wrapper {
+	top: auto;
+	bottom: 3rem;
+	left: 3rem;
+	right: auto;
+	width: auto;
+	min-width: auto;
+}
+
+body[data-theme="clean"] .currentTemp,
+body[data-theme="clean"] .currentTimeDate {
+	background: none;
+	backdrop-filter: none;
+	box-shadow: none;
+	padding: 0.5rem 0;
+	height: auto;
+}
+
+body[data-theme="clean"] .temp {
+	text-shadow: 0 0 20px rgba(0, 0, 0, 0.9),
+	             0 2px 12px rgba(0, 0, 0, 0.9),
+	             0 4px 24px rgba(0, 0, 0, 0.8),
+	             0 0 40px rgba(0, 0, 0, 0.6);
+	font-weight: 200;
+	letter-spacing: -0.02em;
+}
+
+body[data-theme="clean"] .location {
+	text-shadow: 0 0 16px rgba(0, 0, 0, 0.9),
+	             0 1px 8px rgba(0, 0, 0, 0.9),
+	             0 2px 16px rgba(0, 0, 0, 0.8);
+	font-weight: 400;
+}
+
+body[data-theme="clean"] #weather_details_wrapper {
+	bottom: 3rem;
+	left: auto;
+	right: 3rem;
+	display: flex;
+	gap: 1rem;
+	align-items: flex-start;
+}
+
+body[data-theme="clean"] .card {
+	background: none;
+	backdrop-filter: none;
+	box-shadow: none;
+	padding: 0.5rem 0;
+}
+
+body[data-theme="clean"] .weather-label,
+body[data-theme="clean"] .weather-value {
+	text-shadow: 0 0 12px rgba(0, 0, 0, 0.9),
+	             0 1px 6px rgba(0, 0, 0, 0.9),
+	             0 2px 12px rgba(0, 0, 0, 0.8);
+}
+
+body[data-theme="clean"] .weather-icon {
+	filter: brightness(0) invert(1) drop-shadow(0 2px 8px rgba(0, 0, 0, 0.8));
+}
+
+body[data-theme="clean"] #photo-credit {
+	background: none;
+	text-shadow: 0 1px 4px rgba(0, 0, 0, 0.8);
 }
 
 * {
@@ -19,13 +385,14 @@
 body {
 	min-height: 100vh;
 	margin: 0;
-	font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial;
+	font-family: var(--font-family);
 	color: var(--muted);
 	-webkit-font-smoothing: antialiased;
 	-moz-osx-font-smoothing: grayscale;
 	background-repeat: no-repeat;
 	background-size: cover;
 	background-position: center;
+	transition: background 0.6s ease;
 }
 
 #card_wrapper {
@@ -85,13 +452,13 @@ body {
 
 .temp {
 	font-size: 9vmin;
-	font-weight: 300;
+	font-weight: var(--temp-font-weight);
 	line-height: 1
 }
 
 .location {
 	font-size: 2.6vmin; 
-	font-weight: 700;
+	font-weight: var(--label-font-weight);
 	text-transform: uppercase;
 	letter-spacing: .06em;
 	margin-top: 4px
@@ -175,6 +542,7 @@ body {
 	font-size: 1.25em;
 	font-weight: 700;
 	color: #fff;
+	white-space: nowrap;
 }
 
 .cpu-label {

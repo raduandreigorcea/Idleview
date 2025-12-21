@@ -748,18 +748,23 @@ pub fn run() {
     // Load .env file if it exists
     let _ = dotenvy::dotenv();
     
-    // Start HTTP server in a separate thread
-    std::thread::spawn(|| {
-        let runtime = tokio::runtime::Runtime::new().unwrap();
-        runtime.block_on(async {
-            if let Err(e) = http_server::start_server(8737).await {
-                eprintln!("HTTP server error: {}", e);
-            }
-        });
-    });
-    
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .setup(|app| {
+            let app_handle = app.handle().clone();
+            
+            // Start HTTP server in a separate thread with app handle
+            std::thread::spawn(move || {
+                let runtime = tokio::runtime::Runtime::new().unwrap();
+                runtime.block_on(async move {
+                    if let Err(e) = http_server::start_server(8737, app_handle).await {
+                        eprintln!("HTTP server error: {}", e);
+                    }
+                });
+            });
+            
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             greet,
             get_location,

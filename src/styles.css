@@ -216,14 +216,17 @@ body[data-theme="apple"] .currentTemp {
 	padding: 1rem 1.5rem;
 	width: auto;
 	min-width: 140px;
+	display: flex;
+	flex-direction: column;
+	justify-content: space-between;
 }
 
 body[data-theme="apple"] .currentTemp .temp {
-	font-size: 5vmin;
+	font-size: 9vmin;
 }
 
 body[data-theme="apple"] .currentTemp .location {
-	font-size: 1.8vmin;
+	font-size: 2vmin;
 }
 
 /* Apple: Compact time/date card */
@@ -238,6 +241,9 @@ body[data-theme="apple"] .currentTimeDate {
 	padding: 1rem 1.5rem;
 	width: auto;
 	min-width: 160px;
+	display: flex;
+	flex-direction: column;
+	justify-content: space-between;
 }
 
 body[data-theme="apple"] .currentTimeDate .temp {

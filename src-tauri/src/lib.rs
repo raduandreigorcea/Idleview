@@ -482,13 +482,33 @@ async fn get_unsplash_photo(width: u32, height: u32, query: String) -> Result<Un
     
     // Apply photo quality setting
     let settings = get_settings().unwrap_or_default();
+    
+    // Parse quality as number (supports both string numbers like "100" and legacy text like "high")
     let quality = match settings.photos.photo_quality.as_str() {
-        "low" => 60,
-        "medium" => 75,
-        _ => 85, // high is default
+        // Legacy string values (backwards compatibility)
+        "low" => 65,
+        "medium" => 80,
+        "high" => 100,
+        "maximum" => 100,
+        // Parse numeric strings directly
+        _ => settings.photos.photo_quality.parse::<u32>().unwrap_or(80)
     };
     
-    let photo_url = format!("{}?w={}&h={}&fit=crop&q={}&t={}", data.urls.regular, width, height, quality, timestamp);
+    // Parse the URL and replace existing quality parameter
+    let mut url = data.urls.regular.clone();
+    
+    // Remove existing quality parameter if present
+    if let Some(pos) = url.find("&q=") {
+        if let Some(end_pos) = url[pos+1..].find('&') {
+            url.replace_range(pos..pos+end_pos+1, "");
+        } else {
+            url.truncate(pos);
+        }
+    }
+    
+    // Add our parameters
+    let separator = if url.contains('?') { "&" } else { "?" };
+    let photo_url = format!("{}{}w={}&h={}&fit=crop&q={}&t={}", url, separator, width, height, quality, timestamp);
     
     Ok(UnsplashPhoto {
         url: photo_url,

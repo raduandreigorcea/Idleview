@@ -1,7 +1,7 @@
 const invoke = window.__TAURI__.core.invoke;
 
 // Toggle debug output
-let SHOW_DEBUG = false;
+let SHOW_DEBUG = true;
 
 // Store state
 let currentWeather = null;
@@ -304,7 +304,6 @@ async function fetchUnsplashPhoto(forceRefresh = false) {
             });
             
             if (isValid) {
-                console.log('Using cached photo');
                 await displayPhoto(cached.photo, cached.timestamp, cached.query);
                 return;
             }
@@ -325,8 +324,6 @@ async function fetchUnsplashPhoto(forceRefresh = false) {
             return;
         }
         
-        console.log('Fetching new photo from Unsplash...');
-        
         // Build query using Rust backend with weather data
         const queryResult = await invoke('build_photo_query', {
             cloudcover: currentWeather.cloudcover,
@@ -336,7 +333,7 @@ async function fetchUnsplashPhoto(forceRefresh = false) {
             sunsetIso: currentWeather.sunset
         });
         
-        console.log('Photo query:', queryResult.query);
+        console.log(`📸 Fetching Photo | Query: "${queryResult.query}" | ${window.innerWidth}x${window.innerHeight} @ ${userSettings?.photos?.photo_quality || '85'}%`);
         
         const photo = await invoke('get_unsplash_photo', { 
             width: window.innerWidth, 
@@ -344,7 +341,11 @@ async function fetchUnsplashPhoto(forceRefresh = false) {
             query: queryResult.query
         });
         
-        console.log('Photo fetched successfully');
+        // Extract quality from URL
+        const qualityMatch = photo.url.match(/[?&]q=(\d+)/);
+        const actualQuality = qualityMatch ? qualityMatch[1] : 'unknown';
+        
+        console.log(`✅ Photo Ready | ${photo.author} | Quality: ${actualQuality}%`);
         
         const nowTs = Date.now();
         cachePhoto(photo, queryResult.query);
@@ -410,7 +411,7 @@ async function checkPhotoContext() {
         
         // Prefetch before expiry
         if (cacheAge >= prefetchTime && cacheAge < refreshInterval && !prefetchedPhoto) {
-            console.log(`Cache at ${Math.floor(cacheAge / 60000)}min, prefetching next photo...`);
+            console.log(`⏰ Cache ${Math.floor(cacheAge / 60000)}/${userSettings?.photos?.refresh_interval || 30}min | Prefetching...`);
             await prefetchNextPhoto();
         }
         
@@ -420,7 +421,7 @@ async function checkPhotoContext() {
         });
         
         if (!isValid) {
-            console.log(`Cache expired (${userSettings?.photos?.refresh_interval || 30}min), switching to new photo...`);
+            console.log(`⏰ Cache expired (${userSettings?.photos?.refresh_interval || 30}min) | Refreshing...`);
             await fetchUnsplashPhoto(true); // Will use prefetched if available
         }
     } catch (error) {
@@ -447,9 +448,10 @@ async function checkPhotoContext() {
         });
     });
 
-    // Check photo context immediately on startup, then every 5 minutes
+    // Check photo context immediately on startup, then frequently
+    // Use a 30 second interval to catch expiry within reasonable time
     checkPhotoContext();
-    setInterval(checkPhotoContext, 5 * 60 * 1000);
+    setInterval(checkPhotoContext, 30 * 1000);
     
     // Check for settings changes every 500ms for faster response
     setInterval(checkSettingsChanges, 500);
@@ -523,5 +525,5 @@ listen('refresh-photo', async () => {
     await window.refreshPhoto();
 });
 
-console.log('💡 Tip: Type refreshPhoto() in console to fetch a new background photo');
-console.log('💡 Available commands: getSettings(), saveSettings(settings), resetSettings(), reloadSettings()');
+console.log('%c🎨 Idleview Debug Console', 'font-size: 14px; font-weight: bold; color: #4f46e5');
+console.log('%cCommands: refreshPhoto() | getSettings() | saveSettings(obj) | resetSettings() | reloadSettings()', 'color: #64748b');

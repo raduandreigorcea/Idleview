@@ -2,7 +2,7 @@
   "units": {
     "temperature_unit": "celsius",
     "time_format": "24h",
-    "date_format": "mdy",
+    "date_format": "dmy",
     "wind_speed_unit": "kmh"
   },
   "display": {

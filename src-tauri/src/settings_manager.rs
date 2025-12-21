@@ -29,7 +29,50 @@ pub struct DisplaySettings {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct PhotosSettings {
     pub refresh_interval: u64,  // in minutes
-    pub photo_quality: String,  // "high", "medium", "low"
+    #[serde(deserialize_with = "deserialize_quality")]
+    pub photo_quality: String,  // Accepts both "85" string or 85 number
+}
+
+// Custom deserializer to handle both string and number
+fn deserialize_quality<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::{self, Visitor};
+    use std::fmt;
+
+    struct QualityVisitor;
+
+    impl<'de> Visitor<'de> for QualityVisitor {
+        type Value = String;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+            formatter.write_str("a string or number")
+        }
+
+        fn visit_str<E>(self, value: &str) -> Result<String, E>
+        where
+            E: de::Error,
+        {
+            Ok(value.to_string())
+        }
+
+        fn visit_u64<E>(self, value: u64) -> Result<String, E>
+        where
+            E: de::Error,
+        {
+            Ok(value.to_string())
+        }
+
+        fn visit_i64<E>(self, value: i64) -> Result<String, E>
+        where
+            E: de::Error,
+        {
+            Ok(value.to_string())
+        }
+    }
+
+    deserializer.deserialize_any(QualityVisitor)
 }
 
 impl Default for Settings {
@@ -49,7 +92,7 @@ impl Default for Settings {
             },
             photos: PhotosSettings {
                 refresh_interval: 30,
-                photo_quality: "high".to_string(),
+                photo_quality: "80".to_string(),
             },
         }
     }

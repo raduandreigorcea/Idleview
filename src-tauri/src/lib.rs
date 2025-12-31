@@ -338,14 +338,17 @@ fn build_photo_query(
     snowfall: f64,
     sunrise_iso: Option<String>,
     sunset_iso: Option<String>,
+    enable_festive: Option<bool>,
 ) -> PhotoQuery {
     let mut parts = Vec::new();
     let mut rng = rand::rng();
     
-    // Check for holiday first
+    // Check for holiday first (only if festive queries are enabled)
+    let use_festive = enable_festive.unwrap_or(true);
     let holiday = get_holiday();
     
-    if let Some(h) = holiday.holiday {
+    if use_festive && holiday.holiday.is_some() {
+        let h = holiday.holiday.unwrap();
         // For each holiday, use specific festive imagery with random variety
         match h.as_str() {
             "christmas" => {
@@ -366,8 +369,8 @@ fn build_photo_query(
                 parts.push("new year".to_string());
                 // Pick 2 random terms from New Year options
                 let new_year_terms: &[&str] = &[
-                    "celebration", "fireworks", "champagne", "festive",
-                    "party", "countdown", "sparkle", "midnight"
+                    "celebration", "fireworks", "festive",
+                    "party", "sparkle"
                 ];
                 let selected: Vec<_> = new_year_terms
                     .choose_multiple(&mut rng, 2)
@@ -407,7 +410,7 @@ fn build_photo_query(
             _ => parts.push(h),
         }
     } else {
-        // Only add season if not a holiday
+        // Add season when not using festive themes
         let season = get_season();
         parts.push(season.season);
     }

@@ -5,10 +5,12 @@ use axum::{
     routing::{get, patch, post, put},
     Json, Router,
 };
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use tauri::Emitter;
+use std::sync::{Arc, Mutex};
+use tauri::{Emitter, Manager};
 use tower::ServiceBuilder;
 use tower_http::{
     cors::{Any, CorsLayer},
@@ -19,11 +21,20 @@ use tracing::{info, error};
 
 use crate::settings_manager::{Settings, SettingsManager};
 
+/// Current photo information
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CurrentPhoto {
+    pub url: String,
+    pub author: String,
+    pub author_url: String,
+}
+
 /// Application state shared across handlers
 #[derive(Clone)]
 pub struct AppState {
     pub settings_manager: SettingsManager,
     pub app_handle: tauri::AppHandle,
+    pub current_photo: Arc<Mutex<Option<CurrentPhoto>>>,
 }
 
 /// Custom error type for HTTP responses
@@ -122,6 +133,27 @@ async fn health_check() -> Json<serde_json::Value> {
     }))
 }
 
+/// GET /api/photo/current - Return current photo information
+async fn get_current_photo(State(state): State<AppState>) -> Result<Json<Option<CurrentPhoto>>, AppError> {
+    let photo = state.current_photo
+        .lock()
+        .map_err(|e| AppError(format!("Failed to lock photo state: {}", e)))?;
+    Ok(Json(photo.clone()))
+}
+
+/// POST /api/photo/current - Update current photo information
+async fn update_current_photo(
+    State(state): State<AppState>,
+    Json(photo): Json<CurrentPhoto>,
+) -> Result<Json<CurrentPhoto>, AppError> {
+    let mut current = state.current_photo
+        .lock()
+        .map_err(|e| AppError(format!("Failed to lock photo state: {}", e)))?;
+    *current = Some(photo.clone());
+    info!("Current photo updated: {} by {}", photo.url, photo.author);
+    Ok(Json(photo))
+}
+
 /// Create the router with all routes
 fn create_router(state: AppState, static_dir: PathBuf) -> Router {
     // API routes
@@ -130,6 +162,8 @@ fn create_router(state: AppState, static_dir: PathBuf) -> Router {
         .route("/settings", put(update_settings))
         .route("/settings", patch(patch_settings))
         .route("/settings/reset", post(reset_settings))
+        .route("/photo/current", get(get_current_photo))
+        .route("/photo/current", post(update_current_photo))
         .route("/health", get(health_check));
 
     // CORS configuration - allow all origins for development
@@ -177,17 +211,21 @@ pub async fn start_server(port: u16, app_handle: tauri::AppHandle) -> Result<(),
 
     let state = AppState { 
         settings_manager,
-        app_handle,
+        app_handle: app_handle.clone(),
+        current_photo: Arc::new(Mutex::new(None)),
     };
 
     // Determine static files directory
-    // Serves directly from idleview-control folder
     let static_dir = if cfg!(debug_assertions) {
+        // Development: use the idleview-control folder
         PathBuf::from("../idleview-control")
     } else {
-        // In production, you might want to bundle static files with the app
-        // For now, use the same path
-        PathBuf::from("../idleview-control")
+        // Production: use resource path bundled with the app
+        app_handle
+            .path()
+            .resource_dir()
+            .expect("Failed to get resource directory")
+            .join("idleview-control")
     };
 
     // Create router
@@ -210,6 +248,8 @@ pub async fn start_server(port: u16, app_handle: tauri::AppHandle) -> Result<(),
     info!("   PUT    /api/settings");
     info!("   PATCH  /api/settings");
     info!("   POST   /api/settings/reset");
+    info!("   GET    /api/photo/current");
+    info!("   POST   /api/photo/current");
     info!("   GET    /api/health");
 
     // Start the server

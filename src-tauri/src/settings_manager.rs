@@ -25,7 +25,15 @@ pub struct DisplaySettings {
     pub show_sunrise_sunset: bool,
     pub show_cpu_temp: bool,
     #[serde(default = "default_theme")]
-    pub theme: String,  // "default", "nest"
+    pub theme: String,  // "default", "light"
+    #[serde(default = "default_card_position")]
+    pub card_position: String,  // "left" or "right"
+    #[serde(default)]
+    pub show_debug: bool,  // Show debug panel
+}
+
+fn default_card_position() -> String {
+    "left".to_string()
 }
 
 fn default_theme() -> String {
@@ -37,6 +45,12 @@ pub struct PhotosSettings {
     pub refresh_interval: u64,  // in minutes
     #[serde(deserialize_with = "deserialize_quality")]
     pub photo_quality: String,  // Accepts both "85" string or 85 number
+    #[serde(default = "default_enable_festive")]
+    pub enable_festive_queries: bool,  // Enable holiday/festive photo themes
+}
+
+fn default_enable_festive() -> bool {
+    true
 }
 
 // Custom deserializer to handle both string and number
@@ -96,10 +110,13 @@ impl Default for Settings {
                 show_sunrise_sunset: true,
                 show_cpu_temp: false,
                 theme: "default".to_string(),
+                card_position: "left".to_string(),
+                show_debug: false,
             },
             photos: PhotosSettings {
                 refresh_interval: 30,
                 photo_quality: "80".to_string(),
+                enable_festive_queries: true,
             },
         }
     }

@@ -1,12 +1,10 @@
 const invoke = window.__TAURI__.core.invoke;
 
-// Toggle debug output
-let SHOW_DEBUG = true;
-
 // Store state
 let currentWeather = null;
 let currentPhotoUrl = null;
 let debugInterval = null;
+let creditTimeout = null; // Timer for photo credit auto-hide
 let prefetchedPhoto = null; // Store prefetched photo
 let userSettings = null; // Store user settings
 
@@ -98,13 +96,6 @@ async function updateTimeAndDate() {
         const timeElement = document.getElementById('time');
         timeElement.textContent = timeData.time;
         
-        // Adjust font size for 12h format to prevent wrapping
-        if (userSettings?.units?.time_format === '12h') {
-            timeElement.style.fontSize = '7vmin';
-        } else {
-            timeElement.style.fontSize = '9vmin';
-        }
-        
         document.getElementById('date').innerHTML = `${timeData.day_of_week}<br>${timeData.date}`;
     } catch (error) {
         console.error('Failed to update time:', error);
@@ -166,6 +157,18 @@ function applyDisplaySettings() {
     
     // Apply theme
     applyTheme(userSettings.display.theme || 'default');
+    
+    // Apply card position to both card containers
+    const cardPosition = userSettings.display.card_position || 'left';
+    const cardWrapper = document.getElementById('card_wrapper');
+    const weatherWrapper = document.getElementById('weather_details_wrapper');
+    cardWrapper.setAttribute('data-position', cardPosition);
+    weatherWrapper.setAttribute('data-position', cardPosition);
+    
+    // Set debug panel to opposite side of cards
+    const debugEl = document.getElementById('debug');
+    const debugPosition = cardPosition === 'left' ? 'right' : 'left';
+    debugEl.setAttribute('data-position', debugPosition);
     
     const weatherCards = document.querySelectorAll('#weather_details_wrapper .card');
     
@@ -245,6 +248,13 @@ async function displayPhoto(photo, timestamp = null, query = null) {
         document.body.appendChild(creditElement);
     }
     creditElement.innerHTML = `Photo by <a href="${photo.author_url}" target="_blank">${photo.author}</a> on <a href="https://unsplash.com" target="_blank">Unsplash</a>`;
+    
+    // Show credit and set timer to hide after 10 seconds
+    creditElement.classList.remove('hidden');
+    if (creditTimeout) clearTimeout(creditTimeout);
+    creditTimeout = setTimeout(() => {
+        creditElement.classList.add('hidden');
+    }, 10000);
 
     // Clear previous intervals
     if (debugInterval) clearInterval(debugInterval);
@@ -258,8 +268,25 @@ async function displayPhoto(photo, timestamp = null, query = null) {
         }
     }
 
+    // Send current photo to HTTP API for companion app
+    try {
+        await fetch('http://localhost:8737/api/photo/current', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                url: photo.url,
+                author: photo.author,
+                author_url: photo.author_url
+            })
+        });
+    } catch (error) {
+        // Silently fail - companion app might not be running
+        console.debug('Could not update companion app photo:', error);
+    }
+
     // Debug display
-    if (SHOW_DEBUG) {
+    const showDebug = userSettings?.display?.show_debug || false;
+    if (showDebug) {
         const debugEl = document.getElementById('debug');
         if (debugEl) {
             debugEl.style.display = 'grid';
@@ -331,7 +358,8 @@ async function fetchUnsplashPhoto(forceRefresh = false) {
             rain: currentWeather.rain,
             snowfall: currentWeather.snowfall,
             sunriseIso: currentWeather.sunrise,
-            sunsetIso: currentWeather.sunset
+            sunsetIso: currentWeather.sunset,
+            enableFestive: userSettings?.photos?.enable_festive_queries ?? true
         });
         
         console.log(`📸 Fetching Photo | Query: "${queryResult.query}" | ${window.innerWidth}x${window.innerHeight} @ ${userSettings?.photos?.photo_quality || '85'}%`);
@@ -376,7 +404,8 @@ async function prefetchNextPhoto() {
             rain: currentWeather.rain,
             snowfall: currentWeather.snowfall,
             sunriseIso: currentWeather.sunrise,
-            sunsetIso: currentWeather.sunset
+            sunsetIso: currentWeather.sunset,
+            enableFestive: userSettings?.photos?.enable_festive_queries ?? true
         });
         
         const photo = await invoke('get_unsplash_photo', { 
@@ -546,4 +575,4 @@ listen('refresh-photo', async () => {
 
 console.log('%c🎨 Idleview Debug Console', 'font-size: 14px; font-weight: bold; color: #4f46e5');
 console.log('%cCommands: refreshPhoto() | getSettings() | saveSettings(obj) | resetSettings() | reloadSettings() | setTheme(name)', 'color: #64748b');
-console.log('%cThemes: "default" | "nest" | "apple" | "clean"', 'color: #64748b');
+console.log('%cThemes: "default" | "light" | "minimal"', 'color: #64748b');

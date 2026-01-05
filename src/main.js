@@ -7,6 +7,9 @@ let debugInterval = null;
 let creditTimeout = null; // Timer for photo credit auto-hide
 let prefetchedPhoto = null; // Store prefetched photo
 let userSettings = null; // Store user settings
+let lastCacheValid = null;
+let lastPhotoFetchError = null;
+let lastNextRefreshMs = null;
 
 // Update weather display
 function updateWeatherDisplay(weather) {
@@ -301,10 +304,25 @@ async function displayPhoto(photo, timestamp = null, query = null) {
                         sunsetIso: currentWeather?.sunset
                     });
                     
+                    // Calculate time until next refresh dynamically
+                    let nextRefreshDisplay = 'N/A';
+                    if (cached?.timestamp) {
+                        const refreshInterval = (userSettings?.photos?.refresh_interval || 30) * 60 * 1000;
+                        const cacheAge = Date.now() - cached.timestamp;
+                        const timeUntilRefresh = Math.max(0, refreshInterval - cacheAge);
+                        nextRefreshDisplay = Math.floor(timeUntilRefresh / 1000) + 's';
+                    }
+                    
                     debugEl.innerHTML = `
                         <div>Photo cached: ${debugInfo.photo_age}</div>
                         <div>Query: ${debugInfo.query}</div>
                         <div>Time: ${debugInfo.time_of_day} (${debugInfo.time_source})</div>
+                        <div>API Key: ${debugInfo.api_key_status} (${debugInfo.api_key_source})</div>
+                        <div>Cache timestamp: ${cached?.timestamp ?? 'N/A'}</div>
+                        <div>Last photo fetch: ${window.lastPhotoFetch ? new Date(window.lastPhotoFetch).toLocaleString() : 'N/A'}</div>
+                        <div>Cache valid: ${lastCacheValid === null ? 'N/A' : lastCacheValid ? 'Yes' : 'No'}</div>
+                        <div>Last fetch error: ${lastPhotoFetchError ?? 'None'}</div>
+                        <div>Next refresh in: ${nextRefreshDisplay}</div>
                     `;
                 } catch (e) {
                     console.error('Failed to render debug:', e);
@@ -327,11 +345,10 @@ async function fetchUnsplashPhoto(forceRefresh = false) {
         
         // Check cache validity using Rust
         if (!forceRefresh && cached) {
-            const isValid = await invoke('is_cache_valid', { 
+            lastCacheValid = await invoke('is_cache_valid', { 
                 cacheTimestamp: cached.timestamp 
             });
-            
-            if (isValid) {
+            if (lastCacheValid) {
                 await displayPhoto(cached.photo, cached.timestamp, cached.query);
                 return;
             }
@@ -379,14 +396,14 @@ async function fetchUnsplashPhoto(forceRefresh = false) {
         const nowTs = Date.now();
         cachePhoto(photo, queryResult.query);
         await displayPhoto(photo, nowTs, queryResult.query);
+        window.lastPhotoFetch = nowTs;
         
     } catch (error) {
+        lastPhotoFetchError = error?.message || error?.toString() || 'Unknown error';
         console.error('Failed to fetch Unsplash photo:', error);
-        
         // Fallback to cache
         const cached = getCachedPhoto();
         if (cached) {
-            console.log('Using cached photo as fallback');
             await displayPhoto(cached.photo, cached.timestamp, cached.query);
         }
     }
@@ -429,23 +446,26 @@ async function prefetchNextPhoto() {
 // Check if photo context has changed
 async function checkPhotoContext() {
     const cached = getCachedPhoto();
-    if (!cached) return;
+    if (!cached) {
+        console.log('📸 No cached photo found');
+        return;
+    }
     
     try {
         const now = Date.now();
         const cacheAge = now - cached.timestamp;
+        console.log(`📊 Cache age: ${Math.floor(cacheAge / 60000)}min`);
+
         
         // Get photo refresh interval from settings (convert minutes to milliseconds)
         const refreshInterval = (userSettings?.photos?.refresh_interval || 30) * 60 * 1000;
         const prefetchTime = refreshInterval - (1 * 60 * 1000); // 1 minute before expiry
-        
         // Prefetch before expiry
         if (cacheAge >= prefetchTime && cacheAge < refreshInterval && !prefetchedPhoto) {
-            console.log(`⏰ Cache ${Math.floor(cacheAge / 60000)}/${userSettings?.photos?.refresh_interval || 30}min | Prefetching...`);
             await prefetchNextPhoto();
         }
-        
         // Switch to new photo when cache expires
+        lastNextRefreshMs = cached ? Math.max(0, refreshInterval - cacheAge) : null;
         const isValid = await invoke('is_cache_valid', { 
             cacheTimestamp: cached.timestamp 
         });
@@ -480,8 +500,13 @@ async function checkPhotoContext() {
 
     // Check photo context immediately on startup, then frequently
     // Use a 30 second interval to catch expiry within reasonable time
+    console.log('🔄 Starting photo context check interval (30s)...');
     checkPhotoContext();
-    setInterval(checkPhotoContext, 30 * 1000);
+    const photoContextInterval = setInterval(() => {
+        console.log('⏰ Photo context check triggered');
+        checkPhotoContext();
+    }, 30 * 1000);
+    console.log('✅ Photo context interval started:', photoContextInterval);
     
     // Listen for settings updates from HTTP API instead of polling
     await window.__TAURI__.event.listen('settings-updated', async (event) => {

@@ -1,7 +1,7 @@
 use axum::{
     extract::State,
     http::StatusCode,
-    response::{IntoResponse, Response},
+    response::{IntoResponse, Response, sse::{Event, KeepAlive, Sse}},
     routing::{get, patch, post, put},
     Json, Router,
 };
@@ -10,6 +10,7 @@ use serde_json::json;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::convert::Infallible;
 use tauri::{Emitter, Manager};
 use tower::ServiceBuilder;
 use tower_http::{
@@ -18,6 +19,9 @@ use tower_http::{
     trace::TraceLayer,
 };
 use tracing::{info, error};
+use tokio::sync::broadcast;
+use futures::stream::Stream;
+use async_stream::stream;
 
 use crate::settings_manager::{Settings, SettingsManager};
 
@@ -35,6 +39,7 @@ pub struct AppState {
     pub settings_manager: SettingsManager,
     pub app_handle: tauri::AppHandle,
     pub current_photo: Arc<Mutex<Option<CurrentPhoto>>>,
+    pub event_broadcaster: broadcast::Sender<String>,
 }
 
 /// Custom error type for HTTP responses
@@ -79,6 +84,14 @@ async fn update_settings(
             info!("Settings updated successfully");
             // Emit event to Tauri window
             let _ = state.app_handle.emit("settings-updated", &settings);
+            
+            // Broadcast settings update via SSE
+            let event_data = serde_json::to_string(&json!({
+                "type": "settings-updated",
+                "settings": settings
+            })).unwrap_or_default();
+            let _ = state.event_broadcaster.send(event_data);
+            
             Ok(Json(settings))
         }
         Err(e) => {
@@ -151,7 +164,42 @@ async fn update_current_photo(
         .map_err(|e| AppError(format!("Failed to lock photo state: {}", e)))?;
     *current = Some(photo.clone());
     info!("Current photo updated: {} by {}", photo.url, photo.author);
+    
+    // Broadcast photo update event via SSE
+    let event_data = serde_json::to_string(&json!({
+        "type": "photo-updated",
+        "photo": photo
+    })).unwrap_or_default();
+    let _ = state.event_broadcaster.send(event_data);
+    
     Ok(Json(photo))
+}
+
+/// GET /api/events - Server-Sent Events stream for real-time updates
+async fn events_stream(
+    State(state): State<AppState>,
+) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+    let mut rx = state.event_broadcaster.subscribe();
+    
+    let stream = stream! {
+        loop {
+            match rx.recv().await {
+                Ok(event_data) => {
+                    yield Ok(Event::default().data(event_data));
+                },
+                Err(broadcast::error::RecvError::Lagged(_)) => {
+                    // Client lagged behind, continue
+                    continue;
+                },
+                Err(_) => {
+                    // Channel closed
+                    break;
+                }
+            }
+        }
+    };
+    
+    Sse::new(stream).keep_alive(KeepAlive::default())
 }
 
 /// Create the router with all routes
@@ -164,6 +212,7 @@ fn create_router(state: AppState, static_dir: PathBuf) -> Router {
         .route("/settings/reset", post(reset_settings))
         .route("/photo/current", get(get_current_photo))
         .route("/photo/current", post(update_current_photo))
+        .route("/events", get(events_stream))
         .route("/health", get(health_check));
 
     // CORS configuration - allow all origins for development
@@ -209,16 +258,20 @@ pub async fn start_server(port: u16, app_handle: tauri::AppHandle) -> Result<(),
     let settings_manager = SettingsManager::new()
         .map_err(|e| format!("Failed to initialize settings manager: {}", e))?;
 
+    // Create broadcast channel for SSE events (capacity: 100 events)
+    let (event_broadcaster, _) = broadcast::channel(100);
+
     let state = AppState { 
         settings_manager,
         app_handle: app_handle.clone(),
         current_photo: Arc::new(Mutex::new(None)),
+        event_broadcaster,
     };
 
     // Determine static files directory
     let static_dir = if cfg!(debug_assertions) {
-        // Development: use the idleview-control folder
-        PathBuf::from("../idleview-control")
+        // Development: use the idleview-control folder inside src-tauri
+        PathBuf::from("idleview-control")
     } else {
         // Production: use resource path bundled with the app
         app_handle

@@ -172,6 +172,8 @@ pub struct DebugInfo {
     pub query: String,
     pub time_source: String, // "api" or "fallback"
     pub time_of_day: String, // "dawn", "day", "dusk", "night"
+    pub api_key_status: String,
+    pub api_key_source: String,
 }
 
 #[tauri::command]
@@ -447,8 +449,13 @@ fn build_photo_query(
 
 #[tauri::command]
 async fn get_unsplash_photo(width: u32, height: u32, query: String) -> Result<UnsplashPhoto, String> {
+    // Try runtime env var first, then fall back to compile-time embedded value
     let access_key = std::env::var("UNSPLASH_ACCESS_KEY")
-        .unwrap_or_else(|_| "YOUR_UNSPLASH_ACCESS_KEY".to_string());
+        .unwrap_or_else(|_| {
+            option_env!("UNSPLASH_ACCESS_KEY")
+                .unwrap_or("YOUR_UNSPLASH_ACCESS_KEY")
+                .to_string()
+        });
     
     let url = format!(
         "https://api.unsplash.com/photos/random?orientation=landscape&query={}&w={}&h={}",
@@ -523,8 +530,13 @@ async fn get_unsplash_photo(width: u32, height: u32, query: String) -> Result<Un
 
 #[tauri::command]
 async fn trigger_unsplash_download(download_url: String) -> Result<(), String> {
+    // Try runtime env var first, then fall back to compile-time embedded value
     let access_key = std::env::var("UNSPLASH_ACCESS_KEY")
-        .unwrap_or_else(|_| "YOUR_UNSPLASH_ACCESS_KEY".to_string());
+        .unwrap_or_else(|_| {
+            option_env!("UNSPLASH_ACCESS_KEY")
+                .unwrap_or("YOUR_UNSPLASH_ACCESS_KEY")
+                .to_string()
+        });
     
     let client = reqwest::Client::new();
     let _response = client
@@ -738,11 +750,28 @@ fn get_debug_info(
     // Get time of day info
     let tod = get_time_of_day(sunrise_iso, sunset_iso);
     
+    // Check API key availability
+    let (api_key_status, api_key_source) = match std::env::var("UNSPLASH_ACCESS_KEY") {
+        Ok(key) if key.len() > 10 && key != "YOUR_UNSPLASH_ACCESS_KEY" => {
+            ("Available".to_string(), "Runtime env".to_string())
+        },
+        _ => {
+            match option_env!("UNSPLASH_ACCESS_KEY") {
+                Some(key) if key.len() > 10 && key != "YOUR_UNSPLASH_ACCESS_KEY" => {
+                    ("Available".to_string(), "Compile-time".to_string())
+                },
+                _ => ("Missing or invalid".to_string(), "None".to_string())
+            }
+        }
+    };
+    
     DebugInfo {
         photo_age,
         query: query_str,
         time_source: tod.source,
         time_of_day: tod.time_of_day,
+        api_key_status,
+        api_key_source,
     }
 }
 

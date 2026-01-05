@@ -29,7 +29,7 @@
       "icons/icon.ico"
     ],
     "resources": [
-      "../idleview-control/*"
+      "idleview-control/**/*"
     ]
   }
 }

@@ -51,6 +51,7 @@ body {
 	background-repeat: no-repeat;
 	background-size: cover;
 	background-position: center;
+	transition: background-image 1.2s ease-in-out;
 }
 
 #card_wrapper {

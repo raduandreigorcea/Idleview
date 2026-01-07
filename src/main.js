@@ -212,6 +212,35 @@ function applyTheme(themeName) {
     }
 }
 
+// Helper: Get refresh interval in milliseconds
+function getRefreshIntervalMs() {
+    return (userSettings?.photos?.refresh_interval || 30) * 60 * 1000;
+}
+
+// Helper: Build photo query parameters
+function buildPhotoQueryParams() {
+    if (!currentWeather) return null;
+    
+    return {
+        cloudcover: currentWeather.cloudcover,
+        rain: currentWeather.rain,
+        snowfall: currentWeather.snowfall,
+        sunriseIso: currentWeather.sunrise,
+        sunsetIso: currentWeather.sunset,
+        enableFestive: userSettings?.photos?.enable_festive_queries ?? true
+    };
+}
+
+// Helper: Fetch photo from Unsplash with a given query
+async function fetchPhotoWithQuery(query) {
+    const photo = await invoke('get_unsplash_photo', { 
+        width: window.innerWidth, 
+        height: window.innerHeight,
+        query: query
+    });
+    return photo;
+}
+
 // Display photo
 async function displayPhoto(photo, timestamp = null, query = null) {
     currentPhotoUrl = photo.url;
@@ -307,7 +336,7 @@ async function displayPhoto(photo, timestamp = null, query = null) {
                     // Calculate time until next refresh dynamically
                     let nextRefreshDisplay = 'N/A';
                     if (cached?.timestamp) {
-                        const refreshInterval = (userSettings?.photos?.refresh_interval || 30) * 60 * 1000;
+                        const refreshInterval = getRefreshIntervalMs();
                         const cacheAge = Date.now() - cached.timestamp;
                         const timeUntilRefresh = Math.max(0, refreshInterval - cacheAge);
                         nextRefreshDisplay = Math.floor(timeUntilRefresh / 1000) + 's';
@@ -370,22 +399,17 @@ async function fetchUnsplashPhoto(forceRefresh = false) {
         }
         
         // Build query using Rust backend with weather data
-        const queryResult = await invoke('build_photo_query', {
-            cloudcover: currentWeather.cloudcover,
-            rain: currentWeather.rain,
-            snowfall: currentWeather.snowfall,
-            sunriseIso: currentWeather.sunrise,
-            sunsetIso: currentWeather.sunset,
-            enableFestive: userSettings?.photos?.enable_festive_queries ?? true
-        });
+        const queryParams = buildPhotoQueryParams();
+        if (!queryParams) {
+            console.log('Cannot build query without weather data');
+            return;
+        }
+        
+        const queryResult = await invoke('build_photo_query', queryParams);
         
         console.log(`📸 Fetching Photo | Query: "${queryResult.query}" | ${window.innerWidth}x${window.innerHeight} @ ${userSettings?.photos?.photo_quality || '85'}%`);
         
-        const photo = await invoke('get_unsplash_photo', { 
-            width: window.innerWidth, 
-            height: window.innerHeight,
-            query: queryResult.query
-        });
+        const photo = await fetchPhotoWithQuery(queryResult.query);
         
         // Extract quality from URL
         const qualityMatch = photo.url.match(/[?&]q=(\d+)/);
@@ -416,20 +440,11 @@ async function prefetchNextPhoto() {
     try {
         console.log('Prefetching next photo in background...');
         
-        const queryResult = await invoke('build_photo_query', {
-            cloudcover: currentWeather.cloudcover,
-            rain: currentWeather.rain,
-            snowfall: currentWeather.snowfall,
-            sunriseIso: currentWeather.sunrise,
-            sunsetIso: currentWeather.sunset,
-            enableFestive: userSettings?.photos?.enable_festive_queries ?? true
-        });
+        const queryParams = buildPhotoQueryParams();
+        if (!queryParams) return;
         
-        const photo = await invoke('get_unsplash_photo', { 
-            width: window.innerWidth, 
-            height: window.innerHeight,
-            query: queryResult.query
-        });
+        const queryResult = await invoke('build_photo_query', queryParams);
+        const photo = await fetchPhotoWithQuery(queryResult.query);
         
         // Store for later use
         prefetchedPhoto = {
@@ -455,10 +470,9 @@ async function checkPhotoContext() {
         const now = Date.now();
         const cacheAge = now - cached.timestamp;
         console.log(`📊 Cache age: ${Math.floor(cacheAge / 60000)}min`);
-
         
         // Get photo refresh interval from settings (convert minutes to milliseconds)
-        const refreshInterval = (userSettings?.photos?.refresh_interval || 30) * 60 * 1000;
+        const refreshInterval = getRefreshIntervalMs();
         const prefetchTime = refreshInterval - (1 * 60 * 1000); // 1 minute before expiry
         // Prefetch before expiry
         if (cacheAge >= prefetchTime && cacheAge < refreshInterval && !prefetchedPhoto) {
@@ -483,6 +497,14 @@ async function checkPhotoContext() {
 (async function init() {
     await loadSettings();
     
+    // Show cached photo immediately if available (before fetching weather/location)
+    const cached = getCachedPhoto();
+    if (cached) {
+        console.log('📷 Displaying cached photo immediately...');
+        await displayPhoto(cached.photo, cached.timestamp, cached.query);
+    }
+    
+    // Start UI updates immediately (independent of photo/weather)
     updateTimeAndDate();
     setInterval(updateTimeAndDate, 1000);
 
@@ -498,14 +520,13 @@ async function checkPhotoContext() {
         });
     });
 
-    // Check photo context immediately on startup, then frequently
-    // Use a 30 second interval to catch expiry within reasonable time
-    console.log('🔄 Starting photo context check interval (30s)...');
+    // Check photo context immediately on startup, then periodically
+    console.log('🔄 Starting photo context check interval (5min)...');
     checkPhotoContext();
     const photoContextInterval = setInterval(() => {
         console.log('⏰ Photo context check triggered');
         checkPhotoContext();
-    }, 30 * 1000);
+    }, 5 * 60 * 1000);
     console.log('✅ Photo context interval started:', photoContextInterval);
     
     // Listen for settings updates from HTTP API instead of polling

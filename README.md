@@ -47,7 +47,7 @@ A beautiful, fullscreen dashboard application built with Tauri that displays the
 - **[Axum](https://docs.rs/axum/)**: High-performance HTTP server framework
 - **[Tokio](https://tokio.rs/)**: Asynchronous runtime
 - **JavaScript/HTML/CSS**: Frontend display
-- **Vue.js** (optional): Web control panel UI
+- **Vue.js** : Web control panel UI
 
 ### **External APIs**
 - **[Unsplash API](https://unsplash.com/developers)**: High-quality background images
@@ -60,9 +60,9 @@ A beautiful, fullscreen dashboard application built with Tauri that displays the
 Once running, you can access the control panel from any device on your local network:
 
 ```
-http://192.168.1.XXX:8737
+http://192.168.XXX.XXX:8737
 ```
 
-Replace `XXX` with your device IP address (shown in the server startup logs).
+Replace `XXX` with your device IP address.
 
 ---

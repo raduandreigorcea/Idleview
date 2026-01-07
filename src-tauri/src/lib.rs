@@ -668,7 +668,7 @@ fn get_precipitation_display(weather: WeatherData) -> PrecipitationDisplay {
     } else {
         PrecipitationDisplay {
             icon: "umbrella.svg".to_string(),
-            label: "Sky".to_string(),
+            label: "Precip".to_string(),
             value: "Clear".to_string(),
         }
     }

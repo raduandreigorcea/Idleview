@@ -11,31 +11,56 @@ let lastCacheValid = null;
 let lastPhotoFetchError = null;
 let lastNextRefreshMs = null;
 
+// Helper to set text content on multiple elements with different suffixes
+function setTextForAllThemes(baseId, value) {
+    const suffixes = ['-minimal', '-geometric', '-sidebar'];
+    suffixes.forEach(suffix => {
+        const el = document.getElementById(baseId + suffix);
+        if (el) el.textContent = value;
+    });
+}
+
+// Helper to set innerHTML on multiple elements with different suffixes
+function setHTMLForAllThemes(baseId, value) {
+    const suffixes = ['-minimal', '-geometric', '-sidebar'];
+    suffixes.forEach(suffix => {
+        const el = document.getElementById(baseId + suffix);
+        if (el) el.innerHTML = value;
+    });
+}
+
 // Update weather display
 function updateWeatherDisplay(weather) {
     const tempUnit = weather.temperature_unit === 'fahrenheit' ? '°F' : '°C';
-    document.getElementById('temp').textContent = `${Math.round(weather.temperature)} ${tempUnit}`;
+    setTextForAllThemes('temp', `${Math.round(weather.temperature)} ${tempUnit}`);
     
-    document.getElementById('humidity').textContent = `${weather.humidity}%`;
-    document.getElementById('wind').textContent = `${Math.round(weather.wind_speed)} ${weather.wind_speed_label}`;
-    document.getElementById('cloudiness').textContent = `${weather.cloudcover}%`;
+    setTextForAllThemes('humidity', `${weather.humidity}%`);
+    setTextForAllThemes('wind', `${Math.round(weather.wind_speed)} ${weather.wind_speed_label}`);
+    setTextForAllThemes('cloudiness', `${weather.cloudcover}%`);
 
     // Update precipitation using Rust logic
     invoke('get_precipitation_display', { weather }).then(precip => {
-        document.getElementById('precip-icon').src = `assets/${precip.icon}`;
-        document.getElementById('precip-label').textContent = precip.label;
-        document.getElementById('precipitation').textContent = precip.value;
+        setTextForAllThemes('precipitation', precip.value);
     });
 
     // Update sunrise/sunset (use 12h or 24h based on settings)
     const sunrise = new Date(weather.sunrise);
     const sunset = new Date(weather.sunset);
     const timeFormat = userSettings?.units?.time_format === '12h' 
-        ? { hour: '2-digit', minute: '2-digit', hour12: true }
+        ? { hour: 'numeric', minute: '2-digit', hour12: true }
         : { hour: '2-digit', minute: '2-digit', hour12: false };
     
-    document.getElementById('sunrise').textContent = sunrise.toLocaleTimeString('en-US', timeFormat);
-    document.getElementById('sunset').textContent = sunset.toLocaleTimeString('en-US', timeFormat);
+    let sunriseText = sunrise.toLocaleTimeString('en-US', timeFormat);
+    let sunsetText = sunset.toLocaleTimeString('en-US', timeFormat);
+    
+    // Make 12h format more compact: remove space before AM/PM and use lowercase
+    if (userSettings?.units?.time_format === '12h') {
+        sunriseText = sunriseText.replace(' AM', 'am').replace(' PM', 'pm');
+        sunsetText = sunsetText.replace(' AM', 'am').replace(' PM', 'pm');
+    }
+    
+    setTextForAllThemes('sunrise', sunriseText);
+    setTextForAllThemes('sunset', sunsetText);
 
     currentWeather = weather;
 }
@@ -44,12 +69,12 @@ function updateWeatherDisplay(weather) {
 async function fetchLocation() {
     try {
         const location = await invoke('get_location');
-        document.getElementById('location').textContent = 
-            location.city || `${location.latitude.toFixed(2)}°, ${location.longitude.toFixed(2)}°`;
+        const locationText = location.city || `${location.latitude.toFixed(2)}°, ${location.longitude.toFixed(2)}°`;
+        setTextForAllThemes('location', locationText);
         await updateWeather(location);
     } catch (error) {
         console.error('Failed to fetch location:', error);
-        document.getElementById('location').textContent = 'Unknown';
+        setTextForAllThemes('location', 'Unknown');
     }
 }
 
@@ -70,25 +95,29 @@ async function updateWeather(location) {
 
 // Update CPU temperature
 async function updateCPUTemp() {
+    // CPU card doesn't exist in new layout - skip silently
+    const cpuCard = document.querySelector('.cpu-card');
+    if (!cpuCard) return;
+    
     // Check if CPU temp should be shown in settings
     if (userSettings && !userSettings.display.show_cpu_temp) {
-        document.querySelector('.cpu-card').style.display = 'none';
+        cpuCard.style.display = 'none';
         return;
     }
     
     try {
         const temp = await invoke('get_cpu_temp');
-        const cpuCard = document.querySelector('.cpu-card');
+        const cpuTempEl = document.getElementById('cpu-temp');
         
-        if (temp.value > 0) {
-            document.getElementById('cpu-temp').textContent = temp.display;
+        if (temp.value > 0 && cpuTempEl) {
+            cpuTempEl.textContent = temp.display;
             cpuCard.style.display = 'flex';
         } else {
             cpuCard.style.display = 'none';
         }
     } catch (error) {
         console.error('Failed to fetch CPU temp:', error);
-        document.querySelector('.cpu-card').style.display = 'none';
+        cpuCard.style.display = 'none';
     }
 }
 
@@ -96,10 +125,73 @@ async function updateCPUTemp() {
 async function updateTimeAndDate() {
     try {
         const timeData = await invoke('get_current_time');
-        const timeElement = document.getElementById('time');
-        timeElement.textContent = timeData.time;
         
-        document.getElementById('date').innerHTML = `${timeData.day_of_week}<br>${timeData.date}`;
+        // Update minimal theme time (with styled AM/PM)
+        const timeMinimal = document.getElementById('time-minimal');
+        if (timeMinimal) {
+            let timeText = timeData.time;
+            if (timeText.includes('AM') || timeText.includes('PM')) {
+                timeText = timeText.replace(/(AM|PM)/, '<span class="time-period">$1</span>');
+                timeMinimal.innerHTML = timeText;
+            } else {
+                timeMinimal.textContent = timeText;
+            }
+        }
+        
+        // Update geometric theme time (separate period element)
+        const timeGeometric = document.getElementById('time-geometric');
+        const periodGeometric = document.getElementById('period-geometric');
+        if (timeGeometric) {
+            let timeText = timeData.time;
+            let period = '';
+            if (timeText.includes('AM')) {
+                period = 'AM';
+                timeText = timeText.replace(' AM', '').replace('AM', '');
+            } else if (timeText.includes('PM')) {
+                period = 'PM';
+                timeText = timeText.replace(' PM', '').replace('PM', '');
+            }
+            timeGeometric.textContent = timeText;
+            if (periodGeometric) periodGeometric.textContent = period;
+        }
+        
+        // Update date for minimal theme
+        const dateMinimal = document.getElementById('date-minimal');
+        if (dateMinimal) {
+            dateMinimal.innerHTML = `${timeData.day_of_week}<br>${timeData.date}`;
+        }
+        
+        // Update date for geometric theme (separate day and date)
+        const dayGeometric = document.getElementById('day-geometric');
+        const dateGeometric = document.getElementById('date-geometric');
+        if (dayGeometric) {
+            dayGeometric.textContent = timeData.day_of_week;
+        }
+        if (dateGeometric) {
+            dateGeometric.textContent = timeData.date;
+        }
+        
+        // Update sidebar theme time
+        const timeSidebar = document.getElementById('time-sidebar');
+        if (timeSidebar) {
+            let timeText = timeData.time;
+            if (timeText.includes('AM') || timeText.includes('PM')) {
+                timeText = timeText.replace(/(AM|PM)/, '<span class="sidebar-time-period">$1</span>');
+                timeSidebar.innerHTML = timeText;
+            } else {
+                timeSidebar.textContent = timeText;
+            }
+        }
+        
+        // Update sidebar theme day and date (separate elements)
+        const daySidebar = document.getElementById('day-sidebar');
+        const dateSidebar = document.getElementById('date-sidebar');
+        if (daySidebar) {
+            daySidebar.textContent = timeData.day_of_week;
+        }
+        if (dateSidebar) {
+            dateSidebar.textContent = timeData.date;
+        }
     } catch (error) {
         console.error('Failed to update time:', error);
     }
@@ -159,30 +251,105 @@ function applyDisplaySettings() {
     if (!userSettings) return;
     
     // Apply theme
-    applyTheme(userSettings.display.theme || 'default');
+    applyTheme(userSettings.display.theme || 'minimal');
     
-    // Apply card position to both card containers
-    const cardPosition = userSettings.display.card_position || 'left';
-    const cardWrapper = document.getElementById('card_wrapper');
-    const weatherWrapper = document.getElementById('weather_details_wrapper');
-    cardWrapper.setAttribute('data-position', cardPosition);
-    weatherWrapper.setAttribute('data-position', cardPosition);
+    // Track visibility settings
+    const showSunriseSunset = userSettings.display.show_sunrise_sunset !== false;
+    const showPrecipCloud = userSettings.display.show_precipitation_cloudiness !== false;
+    const showHumidityWind = userSettings.display.show_humidity_wind !== false;
+    const anyMetricsVisible = showSunriseSunset || showPrecipCloud || showHumidityWind;
     
-    // Set debug panel to opposite side of cards
-    const debugEl = document.getElementById('debug');
-    const debugPosition = cardPosition === 'left' ? 'right' : 'left';
-    debugEl.setAttribute('data-position', debugPosition);
-    
-    const weatherCards = document.querySelectorAll('#weather_details_wrapper .card');
-    
-    // Card order: [Humidity+Wind], [Precipitation+Cloudiness], [Sunrise+Sunset], [CPU]
-    if (weatherCards.length >= 3) {
-        weatherCards[0].style.display = userSettings.display.show_humidity_wind ? 'grid' : 'none';
-        weatherCards[1].style.display = userSettings.display.show_precipitation_cloudiness ? 'grid' : 'none';
-        weatherCards[2].style.display = userSettings.display.show_sunrise_sunset ? 'grid' : 'none';
+    // Apply to MINIMAL theme
+    const minimalLayout = document.querySelector('.theme-minimal');
+    if (minimalLayout) {
+        const sunriseMetric = minimalLayout.querySelector('[data-metric="sunrise"]');
+        const sunsetMetric = minimalLayout.querySelector('[data-metric="sunset"]');
+        const precipMetric = minimalLayout.querySelector('[data-metric="precipitation"]');
+        const cloudinessMetric = minimalLayout.querySelector('[data-metric="cloudiness"]');
+        const humidityMetric = minimalLayout.querySelector('[data-metric="humidity"]');
+        const windMetric = minimalLayout.querySelector('[data-metric="wind"]');
+        
+        if (sunriseMetric && sunsetMetric) {
+            sunriseMetric.style.display = showSunriseSunset ? 'flex' : 'none';
+            sunsetMetric.style.display = showSunriseSunset ? 'flex' : 'none';
+        }
+        if (precipMetric && cloudinessMetric) {
+            precipMetric.style.display = showPrecipCloud ? 'flex' : 'none';
+            cloudinessMetric.style.display = showPrecipCloud ? 'flex' : 'none';
+        }
+        if (humidityMetric && windMetric) {
+            humidityMetric.style.display = showHumidityWind ? 'flex' : 'none';
+            windMetric.style.display = showHumidityWind ? 'flex' : 'none';
+        }
+        
+        const metricsGrid = minimalLayout.querySelector('.metrics-grid');
+        const mainWeatherStatus = minimalLayout.querySelector('.main-weather-status');
+        
+        if (metricsGrid) {
+            metricsGrid.style.display = anyMetricsVisible ? 'grid' : 'none';
+        }
+        if (mainWeatherStatus) {
+            mainWeatherStatus.classList.toggle('no-metrics', !anyMetricsVisible);
+        }
     }
     
-    // CPU card visibility is handled in updateCPUTemp()
+    // Apply to GEOMETRIC theme
+    const geometricLayout = document.querySelector('.theme-geometric');
+    if (geometricLayout) {
+        const sunriseChip = geometricLayout.querySelector('[data-metric="sunrise"]');
+        const sunsetChip = geometricLayout.querySelector('[data-metric="sunset"]');
+        const precipChip = geometricLayout.querySelector('[data-metric="precipitation"]');
+        const cloudinessChip = geometricLayout.querySelector('[data-metric="cloudiness"]');
+        const humidityChip = geometricLayout.querySelector('[data-metric="humidity"]');
+        const windChip = geometricLayout.querySelector('[data-metric="wind"]');
+        
+        // Apply visibility based on settings
+        if (sunriseChip) sunriseChip.style.display = showSunriseSunset ? 'flex' : 'none';
+        if (sunsetChip) sunsetChip.style.display = showSunriseSunset ? 'flex' : 'none';
+        if (precipChip) precipChip.style.display = showPrecipCloud ? 'flex' : 'none';
+        if (cloudinessChip) cloudinessChip.style.display = showPrecipCloud ? 'flex' : 'none';
+        if (humidityChip) humidityChip.style.display = showHumidityWind ? 'flex' : 'none';
+        if (windChip) windChip.style.display = showHumidityWind ? 'flex' : 'none';
+        
+        // Hide the entire metrics grid if no metrics are visible
+        const geoMetricsGrid = geometricLayout.querySelector('.geo-metrics-grid');
+        if (geoMetricsGrid) {
+            geoMetricsGrid.style.display = anyMetricsVisible ? 'grid' : 'none';
+        }
+    }
+    
+    // Apply to SIDEBAR theme
+    const sidebarLayout = document.querySelector('.theme-sidebar');
+    if (sidebarLayout) {
+        const sunriseRow = sidebarLayout.querySelector('[data-metric="sunrise"]');
+        const sunsetRow = sidebarLayout.querySelector('[data-metric="sunset"]');
+        const precipRow = sidebarLayout.querySelector('[data-metric="precipitation"]');
+        const cloudinessRow = sidebarLayout.querySelector('[data-metric="cloudiness"]');
+        const humidityRow = sidebarLayout.querySelector('[data-metric="humidity"]');
+        const windRow = sidebarLayout.querySelector('[data-metric="wind"]');
+        
+        // Apply visibility based on settings
+        if (sunriseRow) sunriseRow.style.display = showSunriseSunset ? 'flex' : 'none';
+        if (sunsetRow) sunsetRow.style.display = showSunriseSunset ? 'flex' : 'none';
+        if (precipRow) precipRow.style.display = showPrecipCloud ? 'flex' : 'none';
+        if (cloudinessRow) cloudinessRow.style.display = showPrecipCloud ? 'flex' : 'none';
+        if (humidityRow) humidityRow.style.display = showHumidityWind ? 'flex' : 'none';
+        if (windRow) windRow.style.display = showHumidityWind ? 'flex' : 'none';
+        
+        // Hide details section if no metrics visible
+        const sidebarDetails = sidebarLayout.querySelector('.sidebar-details');
+        if (sidebarDetails) {
+            sidebarDetails.style.display = anyMetricsVisible ? 'block' : 'none';
+        }
+    }
+    
+    // Set debug panel position to opposite side of cards
+    const debugEl = document.getElementById('debug');
+    if (debugEl) {
+        const cardPosition = userSettings.display.card_position || 'left';
+        const debugPosition = cardPosition === 'left' ? 'right' : 'left';
+        debugEl.setAttribute('data-position', debugPosition);
+    }
 }
 
 // Cache helpers
@@ -205,6 +372,10 @@ function cachePhoto(photo, query) {
 
 // Apply theme to body element
 function applyTheme(themeName) {
+    // Map 'default' and 'light' to 'minimal' for backwards compatibility
+    if (themeName === 'default' || themeName === 'light') {
+        themeName = 'minimal';
+    }
     const currentTheme = document.body.getAttribute('data-theme');
     if (currentTheme !== themeName) {
         document.body.setAttribute('data-theme', themeName);
@@ -621,4 +792,4 @@ listen('refresh-photo', async () => {
 
 console.log('%c🎨 Idleview Debug Console', 'font-size: 14px; font-weight: bold; color: #4f46e5');
 console.log('%cCommands: refreshPhoto() | getSettings() | saveSettings(obj) | resetSettings() | reloadSettings() | setTheme(name)', 'color: #64748b');
-console.log('%cThemes: "default" | "light" | "minimal"', 'color: #64748b');
+console.log('%cThemes: "minimal" | "geometric" | "sidebar"', 'color: #64748b');

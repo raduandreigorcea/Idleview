@@ -25,7 +25,7 @@ pub struct DisplaySettings {
     pub show_sunrise_sunset: bool,
     pub show_cpu_temp: bool,
     #[serde(default = "default_theme")]
-    pub theme: String,  // "default", "light"
+    pub theme: String,  // "minimal", "geometric"
     #[serde(default = "default_card_position")]
     pub card_position: String,  // "left" or "right"
     #[serde(default)]
@@ -37,7 +37,7 @@ fn default_card_position() -> String {
 }
 
 fn default_theme() -> String {
-    "default".to_string()
+    "minimal".to_string()
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -109,7 +109,7 @@ impl Default for Settings {
                 show_precipitation_cloudiness: true,
                 show_sunrise_sunset: true,
                 show_cpu_temp: false,
-                theme: "default".to_string(),
+                theme: "minimal".to_string(),
                 card_position: "left".to_string(),
                 show_debug: false,
             },

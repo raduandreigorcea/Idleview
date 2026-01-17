@@ -1,96 +1,272 @@
-<!doctype html>
-<html lang="en">
-
+<!DOCTYPE html>
+<html class="dark" lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Open+Sans:300,400,700" />
-  <link rel="stylesheet" href="styles.css" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta charset="utf-8"/>
+  <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
   <title>Idleview</title>
+  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Playfair+Display:wght@400&display=swap" rel="stylesheet"/>
+  <link rel="stylesheet" href="styles.css" />
   <script type="module" src="/main.js" defer></script>
 </head>
-
 <body>
-
-
-  <aside id="card_wrapper">
-    <section class="currentTemp">
-      <span class="temp" id="temp">--&deg;</span>
-      <span class="location" id="location">...</span>
-    </section>
-    <section class="currentTimeDate">
-      <span class="temp" id="time"></span>
-      <span class="location" id="date"></span>
-    </section>
-  </aside>
-
-  <div id="weather_details_wrapper">
-    <!-- Humidity + Wind Card -->
-    <article class="card">
-      <div class="item">
-        <img src="assets/droplet.svg" alt="Humidity" class="weather-icon">
-        <div class="weather-data">
-          <span class="weather-label">Humidity</span>
-          <span class="weather-value" id="humidity">--%</span>
-        </div>
-      </div>
-      <div class="item">
-        <img src="assets/wind.svg" alt="Wind" class="weather-icon">
-        <div class="weather-data">
-          <span class="weather-label">Wind</span>
-          <span class="weather-value" id="wind">-- km/h</span>
-        </div>
-      </div>
-    </article>
-
-    <!-- Sky + Clouds Card -->
-    <article class="card">
-      <div class="item">
-        <img src="assets/umbrella.svg" alt="Precip" class="weather-icon" id="precip-icon">
-        <div class="weather-data">
-          <span class="weather-label" id="precip-label">Precip</span>
-          <span class="weather-value" id="precipitation">Clear</span>
-        </div>
-      </div>
-      <div class="item">
-        <img src="assets/cloudy.svg" alt="Clouds" class="weather-icon">
-        <div class="weather-data">
-          <span class="weather-label">Clouds</span>
-          <span class="weather-value" id="cloudiness">--%</span>
-        </div>
-      </div>
-    </article>
-
-    <!-- Sunrise/Sunset Card -->
-    <article class="card">
-      <div class="item">
-        <img src="assets/sunrise.svg" alt="Sunrise" class="weather-icon">
-        <div class="weather-data">
-          <span class="weather-label">Sunrise</span>
-          <span class="weather-value" id="sunrise">--:--</span>
-        </div>
-      </div>
-      <div class="item">
-        <img src="assets/sunset.svg" alt="Sunset" class="weather-icon">
-        <div class="weather-data">
-          <span class="weather-label">Sunset</span>
-          <span class="weather-value" id="sunset">--:--</span>
-        </div>
-      </div>
-    </article>
-
-    <!-- CPU Temperature Card (hidden on non-Linux) -->
-    <article class="card cpu-card">
-      <span class="cpu-label">CPU</span>
-      <span class="cpu-value" id="cpu-temp">--°</span>
-    </article>
+  <!-- Background Image Layer -->
+  <div class="background-layer">
+    <div class="background-overlay"></div>
   </div>
 
+  <!-- ==================== MINIMAL THEME LAYOUT ==================== -->
+  <div class="theme-layout theme-minimal">
+    <div class="main-container">
+      <!-- Top Utility -->
+      <div class="top-utility">
+        <div class="location-badge">
+          <img src="assets/map-pin.svg" alt="Location" class="location-icon">
+          <span class="location-text" id="location-minimal">Loading...</span>
+        </div>
+      </div>
 
+      <!-- Center Clock and Date -->
+      <div class="center-content">
+        <h1 class="clock-display" id="time-minimal">--:--</h1>
+        <h2 class="date-display" id="date-minimal">...</h2>
+      </div>
 
-  <div id="debug">
+      <!-- Bottom Weather Status Bar -->
+      <div class="bottom-section">
+        <div class="glass-dock">
+          <!-- Main Status -->
+          <div class="main-weather-status">
+            <div class="current-weather-container">
+              <span class="current-weather-label">Current Weather</span>
+              <div class="current-weather-display">
+                <span class="temperature-large" id="temp-minimal">-- °C</span>
+              </div>
+            </div>
+          </div>
 
+          <!-- Metrics Grid -->
+          <div class="metrics-grid">
+            <div class="metric-item" data-metric="sunrise">
+              <img src="assets/sunrise.svg" alt="Sunrise" class="metric-icon">
+              <span class="metric-label">Sunrise</span>
+              <span class="metric-value" id="sunrise-minimal">--:--</span>
+            </div>
+            <div class="metric-item" data-metric="sunset">
+              <img src="assets/sunset.svg" alt="Sunset" class="metric-icon">
+              <span class="metric-label">Sunset</span>
+              <span class="metric-value" id="sunset-minimal">--:--</span>
+            </div>
+            <div class="metric-item" data-metric="precipitation">
+              <img src="assets/umbrella.svg" alt="Precipitation" class="metric-icon">
+              <span class="metric-label">Precip</span>
+              <span class="metric-value" id="precipitation-minimal">--%</span>
+            </div>
+            <div class="metric-item" data-metric="humidity">
+              <img src="assets/droplet.svg" alt="Humidity" class="metric-icon">
+              <span class="metric-label">Humidity</span>
+              <span class="metric-value" id="humidity-minimal">--%</span>
+            </div>
+            <div class="metric-item" data-metric="wind">
+              <img src="assets/wind.svg" alt="Wind" class="metric-icon">
+              <span class="metric-label">Wind</span>
+              <span class="metric-value" id="wind-minimal">-- km/h</span>
+            </div>
+            <div class="metric-item" data-metric="cloudiness">
+              <img src="assets/cloudy.svg" alt="Clouds" class="metric-icon">
+              <span class="metric-label">Clouds</span>
+              <span class="metric-value" id="cloudiness-minimal">--%</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
+
+  <!-- ==================== GEOMETRIC THEME LAYOUT ==================== -->
+  <div class="theme-layout theme-geometric">
+    <!-- Corner Overlays for Readability -->
+    <div class="corner-overlay-tl"></div>
+    <div class="corner-overlay-br"></div>
+    
+    <div class="geometric-container">
+      <!-- TOP-LEFT: Time, Date, and Temperature -->
+      <div class="geo-top-left">
+        <div class="geo-time-row">
+          <h1 class="geo-clock" id="time-geometric">--:--</h1>
+          <span class="geo-period" id="period-geometric"></span>
+        </div>
+        <div class="geo-date-block">
+          <span class="geo-day" id="day-geometric">...</span>
+          <span class="geo-date" id="date-geometric">...</span>
+        </div>
+        <div class="geo-temp-display">
+          <span class="geo-temp-label">Current Temp</span>
+          <span class="geo-temp-value" id="temp-geometric">--°C</span>
+        </div>
+      </div>
+
+      <!-- BOTTOM-RIGHT: Location and Weather Metrics -->
+      <div class="geo-bottom-right">
+        <!-- Location Info -->
+        <div class="geo-location">
+          <div class="geo-location-label">
+            <img src="assets/map-pin.svg" alt="Location" class="geo-location-icon">
+            <span>Current Location</span>
+          </div>
+          <h3 class="geo-location-name" id="location-geometric">Loading...</h3>
+        </div>
+
+        <!-- Weather Metrics Grid -->
+        <div class="geo-metrics-grid">
+          <div class="geo-metric-chip" data-metric="sunrise">
+            <div class="geo-chip-icon">
+              <img src="assets/sunrise.svg" alt="Sunrise" class="geo-icon-img">
+            </div>
+            <div class="geo-chip-content">
+              <span class="geo-chip-label">Sunrise</span>
+              <span class="geo-chip-value" id="sunrise-geometric">--:--</span>
+            </div>
+          </div>
+          <div class="geo-metric-chip" data-metric="sunset">
+            <div class="geo-chip-icon">
+              <img src="assets/sunset.svg" alt="Sunset" class="geo-icon-img">
+            </div>
+            <div class="geo-chip-content">
+              <span class="geo-chip-label">Sunset</span>
+              <span class="geo-chip-value" id="sunset-geometric">--:--</span>
+            </div>
+          </div>
+          <div class="geo-metric-chip" data-metric="humidity">
+            <div class="geo-chip-icon">
+              <img src="assets/droplet.svg" alt="Humidity" class="geo-icon-img">
+            </div>
+            <div class="geo-chip-content">
+              <span class="geo-chip-label">Humidity</span>
+              <span class="geo-chip-value" id="humidity-geometric">--%</span>
+            </div>
+          </div>
+          <div class="geo-metric-chip" data-metric="precipitation">
+            <div class="geo-chip-icon">
+              <img src="assets/umbrella.svg" alt="Precip" class="geo-icon-img">
+            </div>
+            <div class="geo-chip-content">
+              <span class="geo-chip-label">Precip</span>
+              <span class="geo-chip-value" id="precipitation-geometric">--%</span>
+            </div>
+          </div>
+          <div class="geo-metric-chip" data-metric="wind">
+            <div class="geo-chip-icon">
+              <img src="assets/wind.svg" alt="Wind" class="geo-icon-img">
+            </div>
+            <div class="geo-chip-content">
+              <span class="geo-chip-label">Wind</span>
+              <span class="geo-chip-value" id="wind-geometric">-- km/h</span>
+            </div>
+          </div>
+          <div class="geo-metric-chip" data-metric="cloudiness">
+            <div class="geo-chip-icon">
+              <img src="assets/cloudy.svg" alt="Cloudy" class="geo-icon-img">
+            </div>
+            <div class="geo-chip-content">
+              <span class="geo-chip-label">Cloudy</span>
+              <span class="geo-chip-value" id="cloudiness-geometric">--%</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== SIDEBAR THEME LAYOUT ==================== -->
+  <div class="theme-layout theme-sidebar">
+    <!-- Sidebar Glass Panel -->
+    <aside class="sidebar-panel">
+      <!-- Location -->
+      <div class="sidebar-location">
+        <img src="assets/map-pin.svg" alt="Location" class="sidebar-location-icon">
+        <span id="location-sidebar">Loading...</span>
+      </div>
+
+      <!-- Time -->
+      <div class="sidebar-time">
+        <h1 class="sidebar-clock" id="time-sidebar">--:--</h1>
+      </div>
+
+      <!-- Date -->
+      <div class="sidebar-date-group">
+        <p class="sidebar-day" id="day-sidebar">...</p>
+        <p class="sidebar-date" id="date-sidebar">...</p>
+      </div>
+
+      <!-- Temperature -->
+      <div class="sidebar-temp">
+        <span class="sidebar-temp-value" id="temp-sidebar">--°C</span>
+      </div>
+
+      <!-- Weather Details Section -->
+      <div class="sidebar-details">
+        <h3 class="sidebar-details-header">Weather Details</h3>
+        <div class="sidebar-metrics-list">
+          <div class="sidebar-metric-row" data-metric="humidity">
+            <div class="sidebar-metric-left">
+              <div class="sidebar-metric-icon-wrap">
+                <img src="assets/droplet.svg" alt="Humidity" class="sidebar-metric-icon">
+              </div>
+              <span class="sidebar-metric-label">Humidity</span>
+            </div>
+            <span class="sidebar-metric-value" id="humidity-sidebar">--%</span>
+          </div>
+          <div class="sidebar-metric-row" data-metric="wind">
+            <div class="sidebar-metric-left">
+              <div class="sidebar-metric-icon-wrap">
+                <img src="assets/wind.svg" alt="Wind" class="sidebar-metric-icon">
+              </div>
+              <span class="sidebar-metric-label">Wind Speed</span>
+            </div>
+            <span class="sidebar-metric-value" id="wind-sidebar">-- km/h</span>
+          </div>
+          <div class="sidebar-metric-row" data-metric="precipitation">
+            <div class="sidebar-metric-left">
+              <div class="sidebar-metric-icon-wrap">
+                <img src="assets/umbrella.svg" alt="Precipitation" class="sidebar-metric-icon">
+              </div>
+              <span class="sidebar-metric-label">Precipitation</span>
+            </div>
+            <span class="sidebar-metric-value" id="precipitation-sidebar">--%</span>
+          </div>
+          <div class="sidebar-metric-row" data-metric="cloudiness">
+            <div class="sidebar-metric-left">
+              <div class="sidebar-metric-icon-wrap">
+                <img src="assets/cloudy.svg" alt="Cloudiness" class="sidebar-metric-icon">
+              </div>
+              <span class="sidebar-metric-label">Cloudiness</span>
+            </div>
+            <span class="sidebar-metric-value" id="cloudiness-sidebar">--%</span>
+          </div>
+          <div class="sidebar-metric-row" data-metric="sunrise">
+            <div class="sidebar-metric-left">
+              <div class="sidebar-metric-icon-wrap">
+                <img src="assets/sunrise.svg" alt="Sunrise" class="sidebar-metric-icon">
+              </div>
+              <span class="sidebar-metric-label">Sunrise</span>
+            </div>
+            <span class="sidebar-metric-value" id="sunrise-sidebar">--:--</span>
+          </div>
+          <div class="sidebar-metric-row" data-metric="sunset">
+            <div class="sidebar-metric-left">
+              <div class="sidebar-metric-icon-wrap">
+                <img src="assets/sunset.svg" alt="Sunset" class="sidebar-metric-icon">
+              </div>
+              <span class="sidebar-metric-label">Sunset</span>
+            </div>
+            <span class="sidebar-metric-value" id="sunset-sidebar">--:--</span>
+          </div>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <div id="debug"></div>
 </body>
-
 </html>

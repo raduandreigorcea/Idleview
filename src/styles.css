@@ -1,241 +1,866 @@
-@import url("https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap");
-
-/* Default Theme - Clean, minimal ambient display */
+/* CSS Variables */
 :root {
-	--card-bg: rgba(0, 0, 0, 0.25);
-	--card-bg-strong: rgba(0, 0, 0, 0.3);
-	--muted: rgba(255, 255, 255, 0.95);
-	--muted-subtle: rgba(255, 255, 255, 0.6);
-	--glass-blur: 10px;
-	--radius: 12px;
-	--font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-	--temp-font-weight: 300;
-	--label-font-weight: 500;
+    --background-light: #f6f7f8;
+    --background-dark: #101c22;
+    --font-display: 'Inter', sans-serif;
+    --font-serif: 'Playfair Display', serif;
 }
 
-/* Light Theme - Lighter frosted glass */
-body[data-theme="light"] {
-	--card-bg: rgba(255, 255, 255, 0.12);
-	--card-bg-strong: rgba(255, 255, 255, 0.15);
-	--glass-blur: 12px;
+/* Material Symbols Settings */
+.material-symbols-outlined {
+    font-variation-settings: 'FILL' 0, 'wght' 200, 'GRAD' 0, 'opsz' 24;
 }
 
-/* Minimal Theme - Text only, no backgrounds */
-body[data-theme="minimal"] .currentTemp,
-body[data-theme="minimal"] .currentTimeDate,
-body[data-theme="minimal"] .card {
-	background: none;
-	backdrop-filter: none;
-	box-shadow: none;
+/* Text Shadow Utility */
+.text-shadow-sm {
+    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
 }
 
-body[data-theme="minimal"] .temp,
-body[data-theme="minimal"] .location,
-body[data-theme="minimal"] .weather-label,
-body[data-theme="minimal"] .weather-value {
-	text-shadow: 0 2px 8px rgba(0, 0, 0, 0.8);
-}
-
+/* Reset */
 * {
-	box-sizing: border-box;
-	user-select: none
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    user-select: none;
 }
 
+/* Body */
 body {
-	min-height: 100vh;
-	margin: 0;
-	font-family: var(--font-family);
-	color: var(--muted);
-	-webkit-font-smoothing: antialiased;
-	-moz-osx-font-smoothing: grayscale;
-	background-repeat: no-repeat;
-	background-size: cover;
-	background-position: center;
-	transition: background-image 1.2s ease-in-out;
+    background-color: var(--background-light);
+    font-family: var(--font-display);
+    color: white;
+    overflow: hidden;
+    height: 100vh;
+    width: 100vw;
+    background-repeat: no-repeat;
+    background-size: cover;
+    background-position: center;
+    transition: background-image 1.2s ease-in-out;
 }
 
-#card_wrapper {
-	position: fixed;
-	top: 2rem;
-	left: 2rem;
-	z-index: 30;
-	display: grid;
-	grid-template-columns: auto auto;
-	gap: 1rem;
-	font-family: inherit;
+body.dark {
+    background-color: var(--background-dark);
 }
 
-#card_wrapper[data-position="right"] {
-	left: auto;
-	right: 2rem;
+/* ==================== THEME SWITCHING ==================== */
+.theme-layout {
+    display: none;
+    position: relative;
+    z-index: 20;
+    height: 100%;
+    width: 100%;
 }
 
-.card {
-	border-radius: var(--radius);
-	padding: 1.2rem 1.5rem;
-	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
-	backdrop-filter: blur(var(--glass-blur));
-	-webkit-backdrop-filter: blur(var(--glass-blur));
-	background: var(--card-bg);
+/* Default: show minimal theme */
+.theme-minimal {
+    display: block;
+}
 
-	display: flex;
-	flex-direction: column;
+/* Theme switching via data-theme attribute */
+body[data-theme="minimal"] .theme-minimal,
+body[data-theme="default"] .theme-minimal {
+    display: block;
+}
+
+body[data-theme="minimal"] .theme-geometric,
+body[data-theme="default"] .theme-geometric {
+    display: none;
+}
+
+body[data-theme="geometric"] .theme-geometric {
+    display: block;
+}
+
+body[data-theme="geometric"] .theme-minimal,
+body[data-theme="geometric"] .theme-sidebar {
+    display: none;
+}
+
+body[data-theme="sidebar"] .theme-sidebar {
+    display: block;
+}
+
+body[data-theme="sidebar"] .theme-minimal,
+body[data-theme="sidebar"] .theme-geometric {
+    display: none;
+}
+
+/* Hide overlay for sidebar theme - sidebar provides its own contrast */
+body[data-theme="sidebar"] .background-overlay {
+    display: none;
+}
+
+/* Background Layer */
+.background-layer {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+}
+
+.background-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.3);
+    z-index: 10;
+}
+
+/* Hide overlay for geometric theme - it uses corner overlays */
+body[data-theme="geometric"] .background-overlay {
+    display: none;
+}
+
+/* Main Container */
+.main-container {
+    position: relative;
+    z-index: 20;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    align-items: center;
+    justify-content: space-between;
+    padding: 3rem 1.5rem;
+}
+
+/* Top Utility Bar */
+.top-utility {
+    width: 100%;
+    display: flex;
+    justify-content: flex-start;
+    align-items: flex-start;
+}
+
+.location-badge {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.75rem 1.25rem;
+    border-radius: 0.75rem;
+    background: rgba(16, 28, 34, 0.4);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.location-icon {
+    width: 1rem;
+    height: 1rem;
+    filter: brightness(0) invert(1);
+    opacity: 0.8;
+}
+
+.location-text {
+    font-size: 0.75rem;
+    font-weight: 500;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+}
+
+.utility-buttons {
+    display: flex;
+    gap: 1rem;
+}
+
+.icon-button {
+    padding: 0.5rem;
+    border-radius: 9999px;
+    background: transparent;
+    border: none;
+    color: white;
+    cursor: pointer;
+    transition: background-color 0.3s ease;
+}
+
+
+.icon-button .material-symbols-outlined {
+    display: block;
+}
+
+/* Center Content */
+.center-content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+}
+
+.clock-display {
+    font-family: var(--font-serif);
+    font-size: 120px;
+    line-height: 1;
+    letter-spacing: -0.02em;
+    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+    font-weight: 300;
+}
+
+.clock-display .time-period {
+    font-size: 0.35em;
+    margin-left: 0.1em;
+    opacity: 0.8;
+}
+
+@media (min-width: 768px) {
+    .clock-display {
+        font-size: 180px;
+    }
+}
+
+.date-display {
+    font-size: 1.5rem;
+    font-weight: 400;
+    letter-spacing: 0.3em;
+    text-transform: uppercase;
+    margin-top: 1.5rem;
+    text-shadow: 0 3px 6px rgba(0, 0, 0, 0.6);
+    opacity: 1;
+}
+
+@media (min-width: 768px) {
+    .date-display {
+        font-size: 2rem;
+    }
+}
+
+/* Bottom Section */
+.bottom-section {
+    width: 100%;
+    max-width: 80rem;
+    display: flex;
+    justify-content: center;
+}
+
+/* Glass Dock */
+.glass-dock {
+    background: rgba(16, 28, 34, 0.4);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 0.75rem;
+    padding: 1.5rem;
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2rem;
+    width: auto;
+    max-width: calc(100vw - 3rem);
+}
+
+@media (min-width: 768px) {
+    .glass-dock {
+        flex-direction: row;
+    }
+}
+
+/* Main Weather Status */
+.main-weather-status {
+    display: flex;
+    align-items: center;
+    border-right: 1px solid rgba(255, 255, 255, 0.1);
+    padding-right: 2rem;
+}
+
+.main-weather-status.no-metrics {
+    border-right: none;
+    padding-right: 0;
+}
+
+@media (max-width: 767px) {
+    .main-weather-status {
+        border-right: none;
+        padding-right: 0;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        padding-bottom: 2rem;
+    }
+    
+    .main-weather-status.no-metrics {
+        border-bottom: none;
+        padding-bottom: 0;
+    }
+}
+
+.current-weather-container {
+    display: flex;
+    flex-direction: column;
+	align-items: center;
 	gap: 0.5rem;
-	min-width: 11rem;
 }
 
-.currentTemp,
-.currentTimeDate {
-	border-radius: var(--radius);
-	padding: 1.5rem 2rem;
-	backdrop-filter: blur(var(--glass-blur));
-	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
-	-webkit-backdrop-filter: blur(var(--glass-blur));
-	display: flex;
-	flex-direction: column;
-	align-items: center;
-	justify-content: space-between;
-	gap: 0.4rem;
-	min-width: 12rem;
+.current-weather-label {
+    font-size: 1rem;
+    text-transform: uppercase;
+    letter-spacing: 0;
+    opacity: 0.6;
+    margin-bottom: 0.25rem;
+    font-weight: 400;
 }
 
-.currentTemp {
-	background: var(--card-bg-strong);
+.current-weather-display {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
 }
 
-.currentTimeDate {
-	background: var(--card-bg);
+.weather-icon-large {
+    color: white;
+    font-size: 2.5rem;
 }
 
-.temp {
-	font-size: 9vmin;
-	font-weight: 300;
-	line-height: 1;
-	letter-spacing: -0.02em;
-	font-variant-numeric: tabular-nums;
-}
-
-.location {
-	font-size: 1.25rem;
-	font-weight: 500;
-	text-transform: uppercase;
-	letter-spacing: 0.1em;
-	opacity: 0.6;
+.temperature-large {
+    font-size: 3.125rem;
+    letter-spacing: -0.025em;
 	text-align: center;
 }
 
-.time {
-	font-size: 3.5rem;
-	font-weight: 300;
-	letter-spacing: -0.01em;
-	font-variant-numeric: tabular-nums;
+/* Metrics Grid */
+.metrics-grid {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(90px, max-content);
+    gap: 1.5rem;
 }
 
-.date {
-	font-size: 1.125rem;
-	font-weight: 500;
-	text-transform: uppercase;
-	letter-spacing: 0.1em;
-	opacity: 0.9;
-	text-align: center;
+@media (max-width: 767px) {
+    .metrics-grid {
+        grid-template-columns: repeat(2, 1fr);
+        grid-auto-flow: row;
+        gap: 1.5rem;
+    }
 }
 
-#photo-credit {
-	position: fixed;
-	bottom: 10px;
-	right: 10px;
-	z-index: 40;
-	background: rgba(0, 0, 0, 0.2);
-	color: rgba(255, 255, 255, 0.5);
-	padding: 4px 10px;
-	border-radius: 6px;
-	font-size: 10px;
-	font-weight: 500;
-	letter-spacing: 0.02em;
-	opacity: 1;
-	transition: opacity 1s ease-out;
+.metric-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.25rem;
+    min-width: 90px;
 }
 
-#photo-credit.hidden {
-	opacity: 0;
-	pointer-events: none;
+.metric-icon {
+    width: 2.75rem;
+    height: 2.75rem;
+    filter: brightness(0) invert(1);
+    opacity: 0.8;
 }
 
-#weather_details_wrapper {
-	position: fixed;
-	bottom: 2rem;
-	left: 2rem;
-	display: grid;
-	grid-template-columns: repeat(auto-fit, minmax(0, auto));
-	grid-auto-flow: column;
-	gap: 1rem;
-	z-index: 30;
+.metric-label {
+    font-size: 1rem;
+    text-transform: uppercase;
+    opacity: 0.6;
+    font-weight: 400;
 }
 
-#weather_details_wrapper[data-position="right"] {
-	left: auto;
-	right: 2rem;
+.metric-value {
+    font-size: 1.5rem;
+    font-weight: 500;
 }
 
-.item {
-	display: flex;
-	align-items: center;
-	gap: 0.8rem;
-}
-
-.weather-icon {
-	width: 2.75rem;
-	height: 2.75rem;
-	filter: brightness(0) invert(1);
-	opacity: 0.8;
-}
-
-.weather-data {
-	display: flex;
-	flex-direction: column;
-}
-
-.weather-label {
-	font-size: 1.125rem;
-	color: var(--muted-subtle);
-	text-transform: uppercase;
-	letter-spacing: 0.1em;
-	font-weight: 500;
-}
-
-.weather-value {
-	font-size: 1.5rem;
-	font-weight: 400;
-	color: var(--muted);
-	white-space: nowrap;
-	font-variant-numeric: tabular-nums;
-}
-
-/* Debug panel hidden by default; JS will show it when needed */
+/* Debug panel */
 #debug {
-	position: fixed;
-	top: 2rem;
-	right: 2rem;
-	background: rgba(0, 0, 0, 0.7);
-	color: #9cff9c;
-	padding: 10px;
-	border-radius: 8px;
-	font-family: monospace;
-	font-size: 14px;
-	display: none;
-	z-index: 1000;
-	border: 1px dashed currentColor;
+    position: fixed;
+    top: 2rem;
+    left: 2rem;
+    background: rgba(0, 0, 0, 0.7);
+    color: #9cff9c;
+    padding: 10px;
+    border-radius: 8px;
+    font-family: monospace;
+    font-size: 14px;
+    display: none;
+    z-index: 1000;
+    border: 1px dashed currentColor;
 }
 
 #debug[data-position="left"] {
-	right: auto;
-	left: 2rem;
+    right: 2rem;
+	left: auto;
 }
 
-a {
-	color: var(--muted);
+/* ==================== GEOMETRIC THEME ==================== */
+
+/* Corner Overlays for Readability */
+.corner-overlay-tl {
+    position: fixed;
+    inset: 0;
+    background: radial-gradient(circle at top left, rgba(0,0,0,0.6) 0%, rgba(0,0,0,0) 60%);
+    pointer-events: none;
+    z-index: 5;
 }
 
-* {
-	user-select: none;
+.corner-overlay-br {
+    position: fixed;
+    inset: 0;
+    background: radial-gradient(circle at bottom right, rgba(0,0,0,0.6) 0%, rgba(0,0,0,0) 60%);
+    pointer-events: none;
+    z-index: 5;
+}
+
+.geometric-container {
+    position: relative;
+    z-index: 10;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    padding: 3rem;
+}
+
+@media (min-width: 1024px) {
+    .geometric-container {
+        padding: 4rem;
+    }
+}
+
+/* TOP-LEFT: Time and Date */
+.geo-top-left {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.25rem;
+}
+
+.geo-time-row {
+    display: flex;
+    align-items: baseline;
+    gap: 0.25rem;
+}
+
+.geo-clock {
+    font-size: 5rem;
+    font-weight: 700;
+    letter-spacing: -0.04em;
+    filter: drop-shadow(0 4px 8px rgba(0,0,0,0.5));
+    line-height: 1;
+}
+
+@media (min-width: 1024px) {
+    .geo-clock {
+        font-size: 9rem;
+    }
+}
+
+.geo-period {
+    font-size: 1.5rem;
+    font-weight: 400;
+    opacity: 0.7;
+    align-self: flex-end;
+    margin-bottom: 0.5rem;
+}
+
+@media (min-width: 1024px) {
+    .geo-period {
+        font-size: 2rem;
+        margin-bottom: 0.75rem;
+    }
+}
+
+/* Date Block */
+.geo-date-block {
+    display: flex;
+    flex-direction: column;
+    gap: 0.125rem;
+    margin-top: 0.5rem;
+}
+
+.geo-day {
+    font-size: 1rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+    opacity: 0.7;
+    filter: drop-shadow(0 2px 4px rgba(0,0,0,0.5));
+}
+
+@media (min-width: 1024px) {
+    .geo-day {
+        font-size: 1.25rem;
+    }
+}
+
+.geo-date {
+    font-size: 1.75rem;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    opacity: 0.9;
+    filter: drop-shadow(0 2px 4px rgba(0,0,0,0.5));
+}
+
+@media (min-width: 1024px) {
+    .geo-date {
+        font-size: 2.25rem;
+    }
+}
+
+/* Temperature under date */
+.geo-temp-display {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.25rem;
+    margin-top: 1.25rem;
+    padding: 0.75rem 1.25rem;
+    background: rgba(0, 0, 0, 0.3);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-radius: 0.75rem;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.geo-temp-label {
+    font-size: 0.625rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    opacity: 0.6;
+}
+
+@media (min-width: 1024px) {
+    .geo-temp-label {
+        font-size: 0.75rem;
+    }
+}
+
+.geo-temp-value {
+    font-size: 2.25rem;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    line-height: 1;
+}
+
+@media (min-width: 1024px) {
+    .geo-temp-value {
+        font-size: 3rem;
+    }
+}
+
+/* BOTTOM-RIGHT: Weather and Location */
+.geo-bottom-right {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 1rem;
+}
+
+/* Location Info */
+.geo-location {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 0.125rem;
+}
+
+.geo-location-label {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    opacity: 0.8;
+}
+
+.geo-location-icon {
+    width: 1rem;
+    height: 1rem;
+    filter: brightness(0) invert(1);
+}
+
+.geo-location-label span {
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.2em;
+}
+
+.geo-location-name {
+    font-size: 1.875rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    filter: drop-shadow(0 2px 4px rgba(0,0,0,0.5));
+}
+
+@media (min-width: 1024px) {
+    .geo-location-name {
+        font-size: 2.25rem;
+    }
+}
+
+/* Weather Metrics Grid */
+.geo-metrics-grid {
+    display: grid;
+    grid-template-columns: repeat(2, auto);
+    gap: 0.5rem;
+}
+
+@media (min-width: 1024px) {
+    .geo-metrics-grid {
+        gap: 0.75rem;
+    }
+}
+
+.geo-metric-chip {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    background: rgba(0, 0, 0, 0.3);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-radius: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    transition: background-color 0.2s ease;
+}
+
+@media (min-width: 1024px) {
+    .geo-metric-chip {
+        gap: 0.75rem;
+        padding: 0.75rem 1rem;
+        border-radius: 0.75rem;
+    }
+}
+
+.geo-chip-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.45rem;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 0.4rem;
+}
+
+.geo-icon-img {
+    width: 1.35rem;
+    height: 1.35rem;
+    display: block;
+    filter: brightness(0) invert(1);
+    opacity: 0.92;
+}
+
+@media (min-width: 1024px) {
+    .geo-chip-icon {
+        padding: 0.6rem;
+        border-radius: 0.5rem;
+    }
+    .geo-icon-img {
+        width: 1.6rem;
+        height: 1.6rem;
+    }
+}
+
+.geo-chip-content {
+    display: flex;
+    flex-direction: column;
+    gap: 0.125rem;
+}
+
+.geo-chip-label {
+    font-size: 0.625rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    opacity: 0.6;
+    font-weight: 600;
+}
+
+@media (min-width: 1024px) {
+    .geo-chip-label {
+        font-size: 0.7rem;
+    }
+}
+
+.geo-chip-value {
+    font-size: 0.9rem;
+    font-weight: 700;
+}
+
+@media (min-width: 1024px) {
+    .geo-chip-value {
+        font-size: 1rem;
+    }
+}
+
+/* ==================== SIDEBAR THEME ==================== */
+
+.theme-sidebar {
+    display: flex;
+    height: 100%;
+    width: 100%;
+}
+
+.sidebar-panel {
+    width: 100%;
+    max-width: 22rem;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    padding: 2.5rem;
+    background: rgba(16, 28, 34, 0.35);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border-right: 1px solid rgba(255, 255, 255, 0.1);
+    overflow-y: auto;
+}
+
+@media (min-width: 1024px) {
+    .sidebar-panel {
+        padding: 3rem;
+    }
+}
+
+/* Sidebar Header Elements */
+.sidebar-section-label {
+    display: none;
+}
+
+/* Location - top of sidebar */
+.sidebar-location {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 2rem;
+}
+
+.sidebar-location-icon {
+    width: 1rem;
+    height: 1rem;
+    filter: brightness(0) invert(1);
+    opacity: 0.7;
+}
+
+.sidebar-location span {
+    font-size: 0.875rem;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    opacity: 0.85;
+}
+
+/* Time */
+.sidebar-time {
+    margin-bottom: 0.5rem;
+}
+
+.sidebar-clock {
+    font-size: 4.5rem;
+    font-weight: 700;
+    letter-spacing: -0.03em;
+    line-height: 1;
+    white-space: nowrap;
+}
+
+.sidebar-clock .sidebar-time-period {
+    display: inline;
+    font-size: 0.35em;
+    font-weight: 500;
+    opacity: 0.7;
+    margin-left: 0.1em;
+    vertical-align: baseline;
+}
+
+@media (min-width: 1024px) {
+    .sidebar-clock {
+        font-size: 5rem;
+    }
+}
+
+/* Date Group */
+.sidebar-date-group {
+    margin-bottom: 2rem;
+}
+
+.sidebar-day {
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.2em;
+    opacity: 0.6;
+    margin-bottom: 0.25rem;
+}
+
+.sidebar-date {
+    font-size: 1.5rem;
+    font-weight: 400;
+    opacity: 0.9;
+}
+
+@media (min-width: 1024px) {
+    .sidebar-date {
+        font-size: 1.75rem;
+    }
+}
+
+/* Temperature */
+.sidebar-temp {
+    margin-bottom: 2rem;
+}
+
+.sidebar-temp-value {
+    font-size: 3.5rem;
+    font-weight: 700;
+    line-height: 1;
+}
+
+@media (min-width: 1024px) {
+    .sidebar-temp-value {
+        font-size: 4rem;
+    }
+}
+
+/* Weather Details */
+.sidebar-details {
+    margin-top: auto;
+}
+
+.sidebar-details-header {
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.2em;
+    padding-bottom: 1rem;
+    margin-bottom: 1.25rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.sidebar-metrics-list {
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+}
+
+.sidebar-metric-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.sidebar-metric-left {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.sidebar-metric-icon-wrap {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 2.5rem;
+    height: 2.5rem;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 0.5rem;
+    transition: background-color 0.2s ease;
+}
+
+.sidebar-metric-row:hover .sidebar-metric-icon-wrap {
+    background: rgba(19, 164, 236, 0.2);
+}
+
+.sidebar-metric-icon {
+    width: 1.25rem;
+    height: 1.25rem;
+    filter: brightness(0) invert(1);
+    opacity: 0.8;
+}
+
+.sidebar-metric-label {
+    font-size: 0.875rem;
+    font-weight: 500;
+    opacity: 0.7;
+}
+
+.sidebar-metric-value {
+    font-size: 1rem;
+    font-weight: 600;
 }

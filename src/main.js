@@ -36,11 +36,34 @@ function updateWeatherDisplay(weather) {
     
     setTextForAllThemes('humidity', `${weather.humidity}%`);
     setTextForAllThemes('wind', `${Math.round(weather.wind_speed)} ${weather.wind_speed_label}`);
+
     setTextForAllThemes('cloudiness', `${weather.cloudcover}%`);
 
-    // Update precipitation using Rust logic
+    // Update main weather label and icon for rain/snow/clear
+    // Use Rust backend logic for consistency
+
     invoke('get_precipitation_display', { weather }).then(precip => {
+        // Set main weather label (e.g., 'Rain', 'Snow', 'Precip', etc.)
+        setTextForAllThemes('main-weather-status', precip.label);
         setTextForAllThemes('precipitation', precip.value);
+
+        // Dynamically update precipitation metric icon and label for all themes
+        const themes = [
+            { theme: 'minimal', iconSel: '.theme-minimal [data-metric="precipitation"] .metric-icon', labelSel: '.theme-minimal [data-metric="precipitation"] .metric-label' },
+            { theme: 'geometric', iconSel: '.theme-geometric [data-metric="precipitation"] .geo-icon-img', labelSel: '.theme-geometric [data-metric="precipitation"] .geo-chip-label' },
+            { theme: 'sidebar', iconSel: '.theme-sidebar [data-metric="precipitation"] .sidebar-icon-img, .theme-sidebar [data-metric="precipitation"] .metric-icon', labelSel: '.theme-sidebar [data-metric="precipitation"] .sidebar-chip-label, .theme-sidebar [data-metric="precipitation"] .metric-label' }
+        ];
+        themes.forEach(({ iconSel, labelSel }) => {
+            const iconEl = document.querySelector(iconSel);
+            if (iconEl) {
+                iconEl.src = `assets/${precip.icon}`;
+                iconEl.alt = precip.label;
+            }
+            const labelEl = document.querySelector(labelSel);
+            if (labelEl) {
+                labelEl.textContent = precip.label;
+            }
+        });
     });
 
     // Update sunrise/sunset (use 12h or 24h based on settings)

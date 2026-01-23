@@ -589,6 +589,7 @@ async function fetchUnsplashPhoto(forceRefresh = false) {
             cachePhoto(prefetchedPhoto.photo, prefetchedPhoto.query);
             await displayPhoto(prefetchedPhoto.photo, nowTs, prefetchedPhoto.query);
             prefetchedPhoto = null; // Clear prefetch
+            lastPhotoFetchError = null; // Clear error on success
             return;
         }
         
@@ -615,6 +616,7 @@ async function fetchUnsplashPhoto(forceRefresh = false) {
         cachePhoto(photo, queryResult.query);
         await displayPhoto(photo, nowTs, queryResult.query);
         window.lastPhotoFetch = nowTs;
+        lastPhotoFetchError = null; // Clear error on success
         
     } catch (error) {
         lastPhotoFetchError = error?.message || error?.toString() || 'Unknown error';

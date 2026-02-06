@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
-use chrono::{Datelike, Local, Timelike};
+use chrono::{Datelike, Local};
 use std::time::{SystemTime, UNIX_EPOCH};
-use rand::seq::IndexedRandom;
 
 // HTTP server modules
 pub mod settings_manager;
@@ -9,6 +8,230 @@ pub mod http_server;
 
 // Re-export settings types from settings_manager
 use settings_manager::Settings;
+
+// ===== Core functions (public for testing) =====
+
+pub fn get_season_impl() -> Season {
+    let now = Local::now();
+    let month = now.month();
+    
+    let season = match month {
+        3..=5 => "spring",
+        6..=8 => "summer",
+        9..=11 => "autumn",
+        _ => "winter",
+    };
+    
+    Season {
+        season: season.to_string(),
+    }
+}
+
+pub fn get_time_of_day_impl(sunrise_iso: Option<String>, sunset_iso: Option<String>) -> TimeOfDay {
+    // If we have sunrise/sunset data, use it
+    if let (Some(sunrise_str), Some(sunset_str)) = (sunrise_iso, sunset_iso) {
+        // Parse as naive datetime (no timezone) since Open-Meteo returns local time
+        if let (Ok(sunrise), Ok(sunset)) = (
+            chrono::NaiveDateTime::parse_from_str(&sunrise_str, "%Y-%m-%dT%H:%M"),
+            chrono::NaiveDateTime::parse_from_str(&sunset_str, "%Y-%m-%dT%H:%M"),
+        ) {
+            let now = Local::now().naive_local();
+            
+            // Define dawn as 30 minutes before sunrise, dusk as 30 minutes after sunset
+            let dawn_start = sunrise - chrono::Duration::minutes(30);
+            let dawn_end = sunrise + chrono::Duration::minutes(30);
+            let dusk_start = sunset - chrono::Duration::minutes(30);
+            let dusk_end = sunset + chrono::Duration::minutes(30);
+            
+            let time_of_day = if now < dawn_start || now > dusk_end {
+                "night"
+            } else if now >= dawn_start && now <= dawn_end {
+                "dawn"
+            } else if now >= dusk_start && now <= dusk_end {
+                "dusk"
+            } else {
+                "day"
+            };
+            
+            return TimeOfDay {
+                time_of_day: time_of_day.to_string(),
+                source: "api".to_string(),
+            };
+        }
+    }
+    
+    // Fallback to simple hour-based detection
+    TimeOfDay {
+        time_of_day: "night".to_string(),
+        source: "fallback".to_string(),
+    }
+}
+
+pub fn build_photo_query_impl(
+    cloudcover: f64,
+    rain: f64,
+    snowfall: f64,
+    sunrise_iso: Option<String>,
+    sunset_iso: Option<String>,
+    enable_festive: Option<bool>,
+) -> PhotoQuery {
+    
+    // Get time of day and season
+    let tod = get_time_of_day_impl(sunrise_iso, sunset_iso);
+    let season = get_season_impl();
+    
+    // Check for festive/holiday periods
+    let enable_festive = enable_festive.unwrap_or(true);
+    if enable_festive {
+        let now = Local::now();
+        let month = now.month();
+        let day = now.day();
+        
+        // Christmas period (Dec 20-26)
+        if month == 12 && day >= 20 && day <= 26 {
+            return PhotoQuery { query: "christmas".to_string() };
+        }
+        // New Year period (Dec 27 - Jan 5)
+        if (month == 12 && day >= 27) || (month == 1 && day <= 5) {
+            return PhotoQuery { query: "new year".to_string() };
+        }
+        // Halloween period (Oct 25-31)
+        if month == 10 && day >= 25 {
+            return PhotoQuery { query: "halloween".to_string() };
+        }
+    }
+    
+    // Determine precipitation type
+    let has_snow = snowfall > 0.5;
+    let has_rain = rain > 0.5;
+    
+    // Priority: time of day > season > precipitation
+    // Night/dawn/dusk are "special" times that override season focus
+    // During regular day, season takes priority
+    
+    let query = match tod.time_of_day.as_str() {
+        "night" => {
+            // Night is always prominent
+            // Add precipitation as compound phrase: "{season} snowy night", "{season} rainy night"
+            if has_snow {
+                format!("{} snowy night", season.season)
+            } else if has_rain {
+                format!("{} rainy night", season.season)
+            } else {
+                // Just night + season
+                format!("{} night", season.season)
+            }
+        },
+        "dawn" => format!("{} dawn", season.season),
+        "dusk" => format!("{} dusk", season.season),
+        _ => {
+            // Daytime: season is primary, add precipitation if present
+            if has_snow {
+                format!("{} snow", season.season)
+            } else if has_rain {
+                format!("{} rain", season.season)
+            } else if cloudcover > 70.0 && season.season != "winter" {
+                format!("{} cloudy", season.season)
+            } else {
+                // Clear day - just season
+                season.season.to_string()
+            }
+        }
+    };
+    
+    PhotoQuery { query }
+}
+
+pub fn get_current_time_impl() -> FormattedTime {
+    let now = Local::now();
+    
+    // Get settings to determine format
+    let settings = settings_manager::read_settings().unwrap_or_default();
+    
+    // Format time based on settings
+    let time = if settings.units.time_format == "12h" {
+        now.format("%-I:%M %p").to_string()
+    } else {
+        now.format("%H:%M").to_string()
+    };
+    
+    // Format date based on settings
+    let date = match settings.units.date_format.as_str() {
+        "mdy" => now.format("%b %d, %Y").to_string(),  // Nov 28, 2025
+        "dmy" => now.format("%d %b %Y").to_string(),   // 28 Nov 2025
+        "ymd" => now.format("%Y %b %d").to_string(),   // 2025 Nov 28
+        _ => now.format("%b %d, %Y").to_string(),      // Default to MDY
+    };
+    
+    let day_of_week = now.format("%A").to_string().to_uppercase();
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    
+    FormattedTime {
+        time,
+        date,
+        day_of_week,
+        timestamp,
+    }
+}
+
+pub fn get_precipitation_display_impl(weather: WeatherData) -> PrecipitationDisplay {
+    if weather.snowfall > 0.0 {
+        PrecipitationDisplay {
+            icon: "snowflake.svg".to_string(),
+            label: "Snow".to_string(),
+            value: format!("{:.1} cm", weather.snowfall),
+        }
+    } else if weather.rain > 0.0 {
+        PrecipitationDisplay {
+            icon: "droplets.svg".to_string(),
+            label: "Rain".to_string(),
+            value: format!("{:.1} mm", weather.rain),
+        }
+    } else {
+        PrecipitationDisplay {
+            icon: "umbrella.svg".to_string(),
+            label: "Precip".to_string(),
+            value: "Clear".to_string(),
+        }
+    }
+}
+
+pub fn is_cache_valid_impl(cache_timestamp: u64) -> bool {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    
+    let settings = settings_manager::read_settings().unwrap_or_default();
+    let refresh_interval_ms = (settings.photos.refresh_interval as u64) * 60 * 1000;
+    
+    let cache_age = now.saturating_sub(cache_timestamp);
+    cache_age < refresh_interval_ms
+}
+
+pub fn format_time_remaining_impl(milliseconds: i64) -> String {
+    if milliseconds <= 0 {
+        return "0s".to_string();
+    }
+    
+    let total_seconds = milliseconds / 1000;
+    let hours = total_seconds / 3600;
+    let minutes = (total_seconds % 3600) / 60;
+    let seconds = total_seconds % 60;
+    
+    if hours > 0 {
+        format!("{}h {:02}m", hours, minutes)
+    } else if minutes > 0 {
+        format!("{}m {:02}s", minutes, seconds)
+    } else {
+        format!("{}s", seconds)
+    }
+}
+
+// ===== Tauri Commands (wrappers) =====
 
 #[tauri::command]
 fn greet(name: &str) -> String {
@@ -161,9 +384,9 @@ pub struct PhotoCache {
 
 #[derive(Debug, Serialize)]
 pub struct PrecipitationDisplay {
-    pub icon: String,      // "snowflake.svg", "droplet.svg", "umbrella.svg"
-    pub label: String,     // "Snow", "Rain", "Sky"
-    pub value: String,     // "5 mm", "Clear"
+    pub icon: String,      // "snowflake.svg", "droplets.svg", "umbrella.svg"
+    pub label: String,     // "Snow", "Rain", "Precip"
+    pub value: String,     // "5.0 cm", "3.2 mm", "Clear"
 }
 
 #[derive(Debug, Serialize)]
@@ -174,6 +397,12 @@ pub struct DebugInfo {
     pub time_of_day: String, // "dawn", "day", "dusk", "night"
     pub api_key_status: String,
     pub api_key_source: String,
+    // Weather info
+    pub temperature: String,
+    pub rain: String,
+    pub snowfall: String,
+    pub cloudcover: String,
+    pub season: String,
 }
 
 #[tauri::command]
@@ -251,19 +480,7 @@ async fn get_weather(latitude: f64, longitude: f64) -> Result<WeatherData, Strin
 
 #[tauri::command]
 fn get_season() -> Season {
-    let now = Local::now();
-    let month = now.month();
-    
-    let season = match month {
-        3..=5 => "spring",
-        6..=8 => "summer",
-        9..=11 => "autumn",
-        _ => "winter",
-    };
-    
-    Season {
-        season: season.to_string(),
-    }
+    get_season_impl()
 }
 
 #[tauri::command]
@@ -289,48 +506,7 @@ fn get_holiday() -> Holiday {
 
 #[tauri::command]
 fn get_time_of_day(sunrise_iso: Option<String>, sunset_iso: Option<String>) -> TimeOfDay {
-    // If we have sunrise/sunset data, use it
-    if let (Some(sunrise_str), Some(sunset_str)) = (sunrise_iso, sunset_iso) {
-        // Parse as naive datetime (no timezone) since Open-Meteo returns local time
-        let sunrise_result = chrono::NaiveDateTime::parse_from_str(&sunrise_str, "%Y-%m-%dT%H:%M")
-            .or_else(|_| chrono::NaiveDateTime::parse_from_str(&sunrise_str, "%Y-%m-%dT%H:%M:%S"));
-            
-        let sunset_result = chrono::NaiveDateTime::parse_from_str(&sunset_str, "%Y-%m-%dT%H:%M")
-            .or_else(|_| chrono::NaiveDateTime::parse_from_str(&sunset_str, "%Y-%m-%dT%H:%M:%S"));
-        
-        if let (Ok(sunrise), Ok(sunset)) = (sunrise_result, sunset_result) {
-            // Get current time in local timezone
-            let now_local = Local::now().naive_local();
-            let one_hour = chrono::Duration::hours(1);
-            
-            // Use checked_sub to avoid overflow
-            let dawn_start = sunrise.checked_sub_signed(one_hour).unwrap_or(sunrise);
-            let dawn_end = sunrise.checked_add_signed(one_hour).unwrap_or(sunrise);
-            let dusk_start = sunset.checked_sub_signed(one_hour).unwrap_or(sunset);
-            let dusk_end = sunset.checked_add_signed(one_hour).unwrap_or(sunset);
-            
-            let time_of_day = if now_local >= dawn_start && now_local < dawn_end {
-                "dawn"
-            } else if now_local >= dusk_start && now_local < dusk_end {
-                "dusk"
-            } else if now_local >= dawn_end && now_local < dusk_start {
-                "day"
-            } else {
-                "night"
-            };
-            
-            return TimeOfDay {
-                time_of_day: time_of_day.to_string(),
-                source: "api".to_string(),
-            };
-        }
-    }
-    
-    // Fallback: just return night if no sunrise/sunset data
-    TimeOfDay {
-        time_of_day: "night".to_string(),
-        source: "fallback".to_string(),
-    }
+    get_time_of_day_impl(sunrise_iso, sunset_iso)
 }
 
 #[tauri::command]
@@ -342,109 +518,7 @@ fn build_photo_query(
     sunset_iso: Option<String>,
     enable_festive: Option<bool>,
 ) -> PhotoQuery {
-    let mut parts = Vec::new();
-    let mut rng = rand::rng();
-    
-    // Check for holiday first (only if festive queries are enabled)
-    let use_festive = enable_festive.unwrap_or(true);
-    let holiday = get_holiday();
-    
-    if use_festive && holiday.holiday.is_some() {
-        let h = holiday.holiday.unwrap();
-        // For each holiday, use specific festive imagery with random variety
-        match h.as_str() {
-            "christmas" => {
-                parts.push("christmas".to_string());
-                // Pick 2 random terms from Christmas options
-                let christmas_terms: &[&str] = &[
-                    "decorated", "tree", "lights", "fireplace", "cozy", 
-                    "festive", "ornaments", "wreath", "gift", "warm"
-                ];
-                let selected: Vec<_> = christmas_terms
-                    .choose_multiple(&mut rng, 2)
-                    .collect();
-                for term in selected {
-                    parts.push(term.to_string());
-                }
-            },
-            "new year" => {
-                parts.push("new year".to_string());
-                // Pick 2 random terms from New Year options
-                let new_year_terms: &[&str] = &[
-                    "celebration", "fireworks", "festive",
-                    "party", "sparkle"
-                ];
-                let selected: Vec<_> = new_year_terms
-                    .choose_multiple(&mut rng, 2)
-                    .collect();
-                for term in selected {
-                    parts.push(term.to_string());
-                }
-            },
-            "halloween" => {
-                parts.push("halloween".to_string());
-                // Pick 2 random terms from Halloween options
-                let halloween_terms: &[&str] = &[
-                    "spooky", "pumpkin", "haunted", "autumn",
-                    "witch", "ghost", "candle", "dark", "mysterious"
-                ];
-                let selected: Vec<_> = halloween_terms
-                    .choose_multiple(&mut rng, 2)
-                    .collect();
-                for term in selected {
-                    parts.push(term.to_string());
-                }
-            },
-            "easter" => {
-                parts.push("easter".to_string());
-                // Pick 2 random terms from Easter options
-                let easter_terms: &[&str] = &[
-                    "spring", "colorful", "flowers", "pastel",
-                    "bunny", "eggs", "garden", "bloom", "bright"
-                ];
-                let selected: Vec<_> = easter_terms
-                    .choose_multiple(&mut rng, 2)
-                    .collect();
-                for term in selected {
-                    parts.push(term.to_string());
-                }
-            },
-            _ => parts.push(h),
-        }
-    } else {
-        // Add season when not using festive themes
-        let season = get_season();
-        parts.push(season.season);
-    }
-    
-    // Time of day (for everyone)
-    let tod = get_time_of_day(sunrise_iso, sunset_iso);
-    match tod.time_of_day.as_str() {
-        "night" => parts.push("night".to_string()),
-        "dawn" => parts.push("dawn".to_string()),
-        "dusk" => parts.push("dusk".to_string()),
-        "day" => {}, // Don't add anything for day
-        _ => {}
-    }
-    
-    // Precipitation (adds to existing terms)
-    if snowfall > 0.0 {
-        parts.push("snow".to_string());
-    } else if rain > 0.0 {
-        parts.push("rain".to_string());
-    }
-    
-    // Cloudiness (only if very cloudy and no precipitation)
-    if snowfall == 0.0 && rain == 0.0 {
-        let is_very_cloudy = cloudcover >= 70.0;
-        if is_very_cloudy {
-            parts.push("cloudy".to_string());
-        }
-    }
-    
-    PhotoQuery {
-        query: parts.join(" "),
-    }
+    build_photo_query_impl(cloudcover, rain, snowfall, sunrise_iso, sunset_iso, enable_festive)
 }
 
 #[tauri::command]
@@ -604,109 +678,22 @@ fn get_cpu_temp() -> Result<CpuTemp, String> {
 
 #[tauri::command]
 fn get_current_time() -> FormattedTime {
-    let settings = get_settings().unwrap_or_default();
-    let now = Local::now();
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_millis() as u64;
-    
-    // Format time based on user settings
-    let time = match settings.units.time_format.as_str() {
-        "12h" => {
-            let hour = now.hour();
-            let (hour_12, am_pm) = if hour == 0 {
-                (12, "AM")
-            } else if hour < 12 {
-                (hour, "AM")
-            } else if hour == 12 {
-                (12, "PM")
-            } else {
-                (hour - 12, "PM")
-            };
-            format!("{:02}:{:02} {}", hour_12, now.minute(), am_pm)
-        },
-        _ => format!("{:02}:{:02}", now.hour(), now.minute()), // 24h is default
-    };
-    
-    // Get full day name and convert to uppercase (FRIDAY, MONDAY, etc.)
-    let day_of_week = now.format("%A").to_string().to_uppercase();
-    
-    // Format date based on user settings
-    let month = now.format("%b").to_string().to_uppercase();
-    let day = now.day();
-    let year = now.year();
-    
-    let date = match settings.units.date_format.as_str() {
-        "dmy" => format!("{} {}, {}", day, month, year),
-        "ymd" => format!("{} {} {}", year, month, day),
-        _ => format!("{} {}, {}", month, day, year), // mdy is default
-    };
-    
-    FormattedTime {
-        time,
-        date,
-        day_of_week,
-        timestamp,
-    }
+    get_current_time_impl()
 }
 
 #[tauri::command]
 fn get_precipitation_display(weather: WeatherData) -> PrecipitationDisplay {
-    if weather.snowfall > 0.0 {
-        PrecipitationDisplay {
-            icon: "snowflake.svg".to_string(),
-            label: "Snow".to_string(),
-            value: format!("{} mm", weather.snowfall),
-        }
-    } else if weather.rain > 0.0 {
-        PrecipitationDisplay {
-            icon: "droplets.svg".to_string(),
-            label: "Rain".to_string(),
-            value: format!("{} mm", weather.rain),
-        }
-    } else {
-        PrecipitationDisplay {
-            icon: "umbrella.svg".to_string(),
-            label: "Precip".to_string(),
-            value: "Clear".to_string(),
-        }
-    }
+    get_precipitation_display_impl(weather)
 }
 
 #[tauri::command]
 fn is_cache_valid(cache_timestamp: u64) -> bool {
-    let settings = get_settings().unwrap_or_default();
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_millis() as u64;
-    
-    // Use saturating_sub to avoid overflow
-    let cache_age = now.saturating_sub(cache_timestamp);
-    let refresh_interval = settings.photos.refresh_interval * 60 * 1000;
-    
-    cache_age < refresh_interval
+    is_cache_valid_impl(cache_timestamp)
 }
 
 #[tauri::command]
 fn format_time_remaining(milliseconds: i64) -> String {
-    if milliseconds <= 0 {
-        return "0s".to_string();
-    }
-    
-    let total_seconds = milliseconds / 1000;
-    let hours = total_seconds / 3600;
-    let minutes = (total_seconds % 3600) / 60;
-    let seconds = total_seconds % 60;
-    
-    if hours > 0 {
-        format!("{}h {:02}m", hours, minutes)
-    } else if minutes > 0 {
-        format!("{}m {:02}s", minutes, seconds)
-    } else {
-        format!("{}s", seconds)
-    }
+    format_time_remaining_impl(milliseconds)
 }
 
 #[tauri::command]
@@ -715,6 +702,11 @@ fn get_debug_info(
     query: Option<String>,
     sunrise_iso: Option<String>,
     sunset_iso: Option<String>,
+    // Weather data
+    temperature: Option<f64>,
+    rain: Option<f64>,
+    snowfall: Option<f64>,
+    cloudcover: Option<f64>,
 ) -> DebugInfo {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -748,7 +740,10 @@ fn get_debug_info(
     let query_str = query.unwrap_or_else(|| "n/a".to_string());
     
     // Get time of day info
-    let tod = get_time_of_day(sunrise_iso, sunset_iso);
+    let tod = get_time_of_day(sunrise_iso.clone(), sunset_iso.clone());
+    
+    // Get season
+    let season_info = get_season();
     
     // Check API key availability
     let (api_key_status, api_key_source) = match std::env::var("UNSPLASH_ACCESS_KEY") {
@@ -765,6 +760,10 @@ fn get_debug_info(
         }
     };
     
+    // Get settings for temperature unit
+    let settings = get_settings().unwrap_or_default();
+    let temp_unit = settings.units.temperature_unit.as_str();
+    
     DebugInfo {
         photo_age,
         query: query_str,
@@ -772,6 +771,17 @@ fn get_debug_info(
         time_of_day: tod.time_of_day,
         api_key_status,
         api_key_source,
+        temperature: temperature.map(|t| {
+            if temp_unit == "fahrenheit" {
+                format!("{:.1}°F", t)
+            } else {
+                format!("{:.1}°C", t)
+            }
+        }).unwrap_or_else(|| "n/a".to_string()),
+        rain: rain.map(|r| format!("{:.1}mm", r)).unwrap_or_else(|| "n/a".to_string()),
+        snowfall: snowfall.map(|s| format!("{:.1}cm", s)).unwrap_or_else(|| "n/a".to_string()),
+        cloudcover: cloudcover.map(|c| format!("{}%", c as i32)).unwrap_or_else(|| "n/a".to_string()),
+        season: season_info.season,
     }
 }
 

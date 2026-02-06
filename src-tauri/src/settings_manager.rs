@@ -24,20 +24,14 @@ pub struct DisplaySettings {
     pub show_precipitation_cloudiness: bool,
     pub show_sunrise_sunset: bool,
     pub show_cpu_temp: bool,
-    #[serde(default = "default_theme")]
-    pub theme: String,  // "minimal", "geometric"
-    #[serde(default = "default_card_position")]
-    pub card_position: String,  // "left" or "right"
     #[serde(default)]
-    pub show_debug: bool,  // Show debug panel
+    pub show_debug: bool,
+    #[serde(default = "default_debug_position")]
+    pub debug_position: String,  // "left" or "right"
 }
 
-fn default_card_position() -> String {
-    "left".to_string()
-}
-
-fn default_theme() -> String {
-    "minimal".to_string()
+fn default_debug_position() -> String {
+    "right".to_string()
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -109,9 +103,8 @@ impl Default for Settings {
                 show_precipitation_cloudiness: true,
                 show_sunrise_sunset: true,
                 show_cpu_temp: false,
-                theme: "minimal".to_string(),
-                card_position: "left".to_string(),
                 show_debug: false,
+                debug_position: "right".to_string(),
             },
             photos: PhotosSettings {
                 refresh_interval: 30,

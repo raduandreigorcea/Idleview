@@ -118,7 +118,7 @@ async function updateTimeAndDate() {
         if (timeEl) {
             let timeText = timeData.time;
             if (timeText.includes('AM') || timeText.includes('PM')) {
-                timeText = timeText.replace(/(AM|PM)/, '<span class="time-period">$1</span>');
+                timeText = timeText.replace(/\s?(AM|PM)/, '<span class="time-period">$1</span>');
                 timeEl.innerHTML = timeText;
             } else {
                 timeEl.textContent = timeText;

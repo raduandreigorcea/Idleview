@@ -3,7 +3,8 @@
     --background-light: #f6f7f8;
     --background-dark: #101c22;
     --font-display: 'Inter', sans-serif;
-    --font-serif: 'Playfair Display', serif;
+    --font-time: 'Unbounded', sans-serif;
+    --font-date: 'Space Grotesk', sans-serif;
 }
 
 /* Reset */
@@ -101,7 +102,7 @@ body.dark {
 }
 
 .clock-display {
-    font-family: var(--font-serif);
+    font-family: var(--font-time);
     font-size: 120px;
     line-height: 1;
     letter-spacing: -0.02em;
@@ -112,8 +113,9 @@ body.dark {
 
 .clock-display .time-period {
     font-size: 0.35em;
-    margin-left: 0.1em;
-    opacity: 0.8;
+    margin-left: 0.2em;
+    opacity: 1;
+    text-shadow: inherit;
 }
 
 @media (min-width: 768px) {
@@ -123,19 +125,14 @@ body.dark {
 }
 
 .date-display {
-    font-size: 1.5rem;
+    font-family: var(--font-date);
+    font-size: 2.5em;
     font-weight: 500;
     letter-spacing: 0.2em;
     text-transform: uppercase;
     margin-top: 1.5rem;
-    text-shadow: 0 2px 8px rgba(0, 0, 0, 0.65);
+    text-shadow: 0 2px 6px rgba(0, 0, 0, 0.65), 0 0 12px rgba(0, 0, 0, 0.35);
     opacity: 1;
-}
-
-@media (min-width: 768px) {
-    .date-display {
-        font-size: 2rem;
-    }
 }
 
 /* Bottom Section */

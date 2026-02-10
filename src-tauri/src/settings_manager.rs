@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
+
+static SETTINGS_CACHE: OnceLock<RwLock<Settings>> = OnceLock::new();
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Settings {
@@ -161,18 +163,15 @@ fn ensure_settings_dir() -> Result<(), String> {
 
 /// Read settings from disk, returning default if file doesn't exist
 pub fn read_settings() -> Result<Settings, String> {
-    let settings_path = get_settings_path()?;
-    
-    if settings_path.exists() {
-        let content = fs::read_to_string(&settings_path)
-            .map_err(|e| format!("Failed to read settings file: {}", e))?;
-        
-        serde_json::from_str(&content)
-            .map_err(|e| format!("Failed to parse settings JSON: {}", e))
-    } else {
-        // Return default settings if file doesn't exist
-        Ok(Settings::default())
-    }
+    let cache = SETTINGS_CACHE.get_or_init(|| {
+        let loaded = read_settings_from_disk().unwrap_or_default();
+        RwLock::new(loaded)
+    });
+
+    cache
+        .read()
+        .map(|settings| settings.clone())
+        .map_err(|e| format!("Failed to read settings: {}", e))
 }
 
 /// Write settings to disk
@@ -185,8 +184,27 @@ pub fn write_settings(settings: &Settings) -> Result<(), String> {
     
     fs::write(&settings_path, json)
         .map_err(|e| format!("Failed to write settings file: {}", e))?;
+
+    let cache = SETTINGS_CACHE.get_or_init(|| RwLock::new(settings.clone()));
+    if let Ok(mut cached) = cache.write() {
+        *cached = settings.clone();
+    }
     
     Ok(())
+}
+
+fn read_settings_from_disk() -> Result<Settings, String> {
+    let settings_path = get_settings_path()?;
+
+    if settings_path.exists() {
+        let content = fs::read_to_string(&settings_path)
+            .map_err(|e| format!("Failed to read settings file: {}", e))?;
+
+        serde_json::from_str(&content)
+            .map_err(|e| format!("Failed to parse settings JSON: {}", e))
+    } else {
+        Ok(Settings::default())
+    }
 }
 
 /// A thread-safe settings manager

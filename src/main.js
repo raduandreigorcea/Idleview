@@ -9,16 +9,23 @@ let prefetchedPhoto = null;
 let userSettings = null;
 let lastCacheValid = null;
 let lastPhotoFetchError = null;
+let timeInterval = null;
+let timeTimeout = null;
+let lastTimeHtml = null;
+let lastDateHtml = null;
+let lastDateKey = null;
+let sunriseSunsetTimeFormat = null;
+let sunriseSunsetIs12h = false;
 
 // Simple element setters
 const setText = (id, value) => {
     const el = document.getElementById(id);
-    if (el) el.textContent = value;
+    if (el && el.textContent !== value) el.textContent = value;
 };
 
 const setHTML = (id, value) => {
     const el = document.getElementById(id);
-    if (el) el.innerHTML = value;
+    if (el && el.innerHTML !== value) el.innerHTML = value;
 };
 
 // Update weather display
@@ -44,14 +51,13 @@ function updateWeatherDisplay(weather) {
     // Update sunrise/sunset
     const sunrise = new Date(weather.sunrise);
     const sunset = new Date(weather.sunset);
-    const timeFormat = userSettings?.units?.time_format === '12h' 
-        ? { hour: 'numeric', minute: '2-digit', hour12: true }
-        : { hour: '2-digit', minute: '2-digit', hour12: false };
+    if (!sunriseSunsetTimeFormat) updateTimeFormatCache();
+    const timeFormat = sunriseSunsetTimeFormat || { hour: '2-digit', minute: '2-digit', hour12: false };
     
     let sunriseText = sunrise.toLocaleTimeString('en-US', timeFormat);
     let sunsetText = sunset.toLocaleTimeString('en-US', timeFormat);
     
-    if (userSettings?.units?.time_format === '12h') {
+    if (sunriseSunsetIs12h) {
         sunriseText = sunriseText.replace(' AM', 'am').replace(' PM', 'pm');
         sunsetText = sunsetText.replace(' AM', 'am').replace(' PM', 'pm');
     }
@@ -119,19 +125,37 @@ async function updateTimeAndDate() {
             let timeText = timeData.time;
             if (timeText.includes('AM') || timeText.includes('PM')) {
                 timeText = timeText.replace(/\s?(AM|PM)/, '<span class="time-period">$1</span>');
-                timeEl.innerHTML = timeText;
             } else {
-                timeEl.textContent = timeText;
+                timeText = timeText;
+            }
+            if (timeText !== lastTimeHtml) {
+                timeEl.innerHTML = timeText;
+                lastTimeHtml = timeText;
             }
         }
         
         const dateEl = document.getElementById('date');
         if (dateEl) {
-            dateEl.innerHTML = `${timeData.day_of_week}<br>${timeData.date}`;
+            const dateKey = `${timeData.day_of_week}|${timeData.date}`;
+            if (dateKey !== lastDateKey) {
+                const dateHtml = `${timeData.day_of_week}<br>${timeData.date}`;
+                if (dateHtml !== lastDateHtml) {
+                    dateEl.innerHTML = dateHtml;
+                    lastDateHtml = dateHtml;
+                }
+                lastDateKey = dateKey;
+            }
         }
     } catch (error) {
         console.error('Failed to update time:', error);
     }
+}
+
+function updateTimeFormatCache() {
+    sunriseSunsetIs12h = userSettings?.units?.time_format === '12h';
+    sunriseSunsetTimeFormat = sunriseSunsetIs12h
+        ? { hour: 'numeric', minute: '2-digit', hour12: true }
+        : { hour: '2-digit', minute: '2-digit', hour12: false };
 }
 
 // Load and apply user settings
@@ -139,6 +163,7 @@ async function loadSettings() {
     try {
         userSettings = await invoke('get_settings');
         console.log('Settings loaded:', userSettings);
+        updateTimeFormatCache();
         applyDisplaySettings();
     } catch (error) {
         console.error('Failed to load settings:', error);
@@ -147,6 +172,7 @@ async function loadSettings() {
             display: { show_humidity_wind: true, show_precipitation_cloudiness: true, show_sunrise_sunset: true, show_debug: false },
             photos: { refresh_interval: 30, photo_quality: '80', enable_festive_queries: true }
         };
+        updateTimeFormatCache();
     }
 }
 
@@ -159,6 +185,25 @@ async function reloadSettings() {
     }
     await updateTimeAndDate();
     console.log('✅ Settings reloaded and UI updated!');
+}
+
+function startTimeTicker() {
+    if (timeInterval) {
+        clearInterval(timeInterval);
+        timeInterval = null;
+    }
+    if (timeTimeout) {
+        clearTimeout(timeTimeout);
+        timeTimeout = null;
+    }
+
+    updateTimeAndDate();
+    const now = new Date();
+    const msUntilNextMinute = ((60 - now.getSeconds()) * 1000) - now.getMilliseconds();
+    timeTimeout = setTimeout(() => {
+        updateTimeAndDate();
+        timeInterval = setInterval(updateTimeAndDate, 60 * 1000);
+    }, Math.max(0, msUntilNextMinute));
 }
 
 // Apply display settings
@@ -447,8 +492,7 @@ async function checkPhotoContext() {
     }
     
     // Start UI updates
-    updateTimeAndDate();
-    setInterval(updateTimeAndDate, 1000);
+    startTimeTicker();
 
     // Fetch location and weather (with retry logic built-in)
     window.userLocation = null;

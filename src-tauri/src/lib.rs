@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use chrono::{Datelike, Local};
+use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 // HTTP server modules
@@ -10,6 +11,76 @@ pub mod http_server;
 use settings_manager::Settings;
 
 // ===== Core functions (public for testing) =====
+
+static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+static UNSPLASH_ACCESS_KEY: OnceLock<String> = OnceLock::new();
+static SUN_TIMES_CACHE: OnceLock<Mutex<SunTimesCache>> = OnceLock::new();
+
+#[derive(Clone)]
+struct SunTimesCache {
+    sunrise_raw: String,
+    sunset_raw: String,
+    sunrise: chrono::NaiveDateTime,
+    sunset: chrono::NaiveDateTime,
+}
+
+fn http_client() -> &'static reqwest::Client {
+    HTTP_CLIENT.get_or_init(reqwest::Client::new)
+}
+
+fn unsplash_access_key() -> &'static str {
+    UNSPLASH_ACCESS_KEY
+        .get_or_init(|| {
+            std::env::var("UNSPLASH_ACCESS_KEY").unwrap_or_else(|_| {
+                option_env!("UNSPLASH_ACCESS_KEY")
+                    .unwrap_or("YOUR_UNSPLASH_ACCESS_KEY")
+                    .to_string()
+            })
+        })
+        .as_str()
+}
+
+fn get_cached_sun_times(
+    sunrise_str: &str,
+    sunset_str: &str,
+) -> Option<(chrono::NaiveDateTime, chrono::NaiveDateTime)> {
+    if let Some(cache) = SUN_TIMES_CACHE.get() {
+        if let Ok(cache) = cache.lock() {
+            if cache.sunrise_raw == sunrise_str && cache.sunset_raw == sunset_str {
+                return Some((cache.sunrise, cache.sunset));
+            }
+        }
+    }
+
+    let parsed = (
+        chrono::NaiveDateTime::parse_from_str(sunrise_str, "%Y-%m-%dT%H:%M"),
+        chrono::NaiveDateTime::parse_from_str(sunset_str, "%Y-%m-%dT%H:%M"),
+    );
+
+    if let (Ok(sunrise), Ok(sunset)) = parsed {
+        let cache = SUN_TIMES_CACHE.get_or_init(|| {
+            Mutex::new(SunTimesCache {
+                sunrise_raw: sunrise_str.to_string(),
+                sunset_raw: sunset_str.to_string(),
+                sunrise,
+                sunset,
+            })
+        });
+
+        if let Ok(mut cache) = cache.lock() {
+            *cache = SunTimesCache {
+                sunrise_raw: sunrise_str.to_string(),
+                sunset_raw: sunset_str.to_string(),
+                sunrise,
+                sunset,
+            };
+        }
+
+        return Some((sunrise, sunset));
+    }
+
+    None
+}
 
 pub fn get_season_impl() -> Season {
     let now = Local::now();
@@ -31,10 +102,7 @@ pub fn get_time_of_day_impl(sunrise_iso: Option<String>, sunset_iso: Option<Stri
     // If we have sunrise/sunset data, use it
     if let (Some(sunrise_str), Some(sunset_str)) = (sunrise_iso, sunset_iso) {
         // Parse as naive datetime (no timezone) since Open-Meteo returns local time
-        if let (Ok(sunrise), Ok(sunset)) = (
-            chrono::NaiveDateTime::parse_from_str(&sunrise_str, "%Y-%m-%dT%H:%M"),
-            chrono::NaiveDateTime::parse_from_str(&sunset_str, "%Y-%m-%dT%H:%M"),
-        ) {
+        if let Some((sunrise, sunset)) = get_cached_sun_times(&sunrise_str, &sunset_str) {
             let now = Local::now().naive_local();
             
             // Define dawn as 30 minutes before sunrise, dusk as 30 minutes after sunset
@@ -407,7 +475,9 @@ pub struct DebugInfo {
 
 #[tauri::command]
 async fn get_location() -> Result<Location, String> {
-    let response = reqwest::get("http://ip-api.com/json/")
+    let response = http_client()
+        .get("http://ip-api.com/json/")
+        .send()
         .await
         .map_err(|e| format!("Failed to fetch location: {}", e))?;
     
@@ -433,7 +503,9 @@ async fn get_weather(latitude: f64, longitude: f64) -> Result<WeatherData, Strin
         latitude, longitude
     );
     
-    let response = reqwest::get(&url)
+    let response = http_client()
+        .get(&url)
+        .send()
         .await
         .map_err(|e| format!("Failed to fetch weather: {}", e))?;
     
@@ -523,25 +595,16 @@ fn build_photo_query(
 
 #[tauri::command]
 async fn get_unsplash_photo(width: u32, height: u32, query: String) -> Result<UnsplashPhoto, String> {
-    // Try runtime env var first, then fall back to compile-time embedded value
-    let access_key = std::env::var("UNSPLASH_ACCESS_KEY")
-        .unwrap_or_else(|_| {
-            option_env!("UNSPLASH_ACCESS_KEY")
-                .unwrap_or("YOUR_UNSPLASH_ACCESS_KEY")
-                .to_string()
-        });
-    
     let url = format!(
         "https://api.unsplash.com/photos/random?orientation=landscape&query={}&w={}&h={}",
         urlencoding::encode(&query),
         width,
         height
     );
-    
-    let client = reqwest::Client::new();
-    let response = client
+
+    let response = http_client()
         .get(&url)
-        .header("Authorization", format!("Client-ID {}", access_key))
+        .header("Authorization", format!("Client-ID {}", unsplash_access_key()))
         .send()
         .await
         .map_err(|e| format!("Failed to fetch photo: {}", e))?;
@@ -604,18 +667,9 @@ async fn get_unsplash_photo(width: u32, height: u32, query: String) -> Result<Un
 
 #[tauri::command]
 async fn trigger_unsplash_download(download_url: String) -> Result<(), String> {
-    // Try runtime env var first, then fall back to compile-time embedded value
-    let access_key = std::env::var("UNSPLASH_ACCESS_KEY")
-        .unwrap_or_else(|_| {
-            option_env!("UNSPLASH_ACCESS_KEY")
-                .unwrap_or("YOUR_UNSPLASH_ACCESS_KEY")
-                .to_string()
-        });
-    
-    let client = reqwest::Client::new();
-    let _response = client
+    let _response = http_client()
         .get(&download_url)
-        .header("Authorization", format!("Client-ID {}", access_key))
+        .header("Authorization", format!("Client-ID {}", unsplash_access_key()))
         .send()
         .await
         .map_err(|e| format!("Failed to trigger download: {}", e))?;

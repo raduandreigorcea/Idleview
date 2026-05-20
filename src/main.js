@@ -17,6 +17,98 @@ let lastDateKey = null;
 let sunriseSunsetTimeFormat = null;
 let sunriseSunsetIs12h = false;
 
+const CLOCK_FONT_MAP = {
+    roboto: "'Roboto', sans-serif",
+    open_sans: "'Open Sans', sans-serif",
+    google_sans: "'Google Sans', 'Product Sans', sans-serif",
+    inter: "'Inter', sans-serif",
+    montserrat: "'Montserrat', sans-serif",
+    poppins: "'Poppins', sans-serif",
+    lato: "'Lato', sans-serif",
+    noto_sans_japanese: "'Noto Sans JP', sans-serif",
+    arimo: "'Arimo', sans-serif",
+    roboto_condensed: "'Roboto Condensed', sans-serif",
+    unbounded: "'Unbounded', sans-serif",
+    space_grotesk: "'Space Grotesk', sans-serif",
+};
+
+const CLOCK_FONT_WEIGHT_MAP = {
+    thin: 200,
+    light: 300,
+    regular: 400,
+    medium: 500,
+    semibold: 600,
+    bold: 700,
+};
+
+const WEEKDAY_FONT_MAP = {
+    sacramento:     "'Sacramento', cursive",
+    great_vibes:    "'Great Vibes', cursive",
+    dancing_script: "'Dancing Script', cursive",
+    pacifico:       "'Pacifico', cursive",
+    satisfy:        "'Satisfy', cursive",
+    pinyon_script:  "'Pinyon Script', cursive",
+    alex_brush:     "'Alex Brush', cursive",
+    kaushan_script: "'Kaushan Script', cursive",
+    italianno:      "'Italianno', cursive",
+};
+
+function applyWeekdayTypographySettings() {
+    const root = document.documentElement;
+    if (!root) return;
+    const display = userSettings?.display || {};
+
+    // Weekday font family
+    const weekdayKey = (display.weekday_font || 'great_vibes').toLowerCase();
+    root.style.setProperty('--font-weekday', WEEKDAY_FONT_MAP[weekdayKey] || WEEKDAY_FONT_MAP.sacramento);
+
+    // Weekday font size
+    const wSize = Math.max(16, Math.min(120, Number(display.weekday_font_size) || 70));
+    root.style.setProperty('--font-size-weekday', `${wSize}px`);
+
+    // Weekday font weight
+    const wWeight = CLOCK_FONT_WEIGHT_MAP[(display.weekday_font_weight || 'thin').toLowerCase()] ?? 200;
+    root.style.setProperty('--font-weight-weekday', wWeight);
+
+    // Date font family (checks both sans-serif and cursive/script pools)
+    const dateKey = (display.date_font || 'kaushan_script').toLowerCase();
+    root.style.setProperty('--font-date', CLOCK_FONT_MAP[dateKey] || WEEKDAY_FONT_MAP[dateKey] || CLOCK_FONT_MAP.space_grotesk);
+
+    // Date font size
+    const dSize = Math.max(16, Math.min(120, Number(display.date_font_size) || 40));
+    root.style.setProperty('--font-size-date', `${dSize}px`);
+
+    // Date font weight
+    const dWeight = CLOCK_FONT_WEIGHT_MAP[(display.date_font_weight || 'medium').toLowerCase()] ?? 500;
+    root.style.setProperty('--font-weight-date', dWeight);
+}
+
+function applyClockTypographySettings() {
+    const root = document.documentElement;
+    if (!root) return;
+
+    const display = userSettings?.display || {};
+
+    // Font family
+    const configuredFont = (display.clock_font || 'roboto').toLowerCase();
+    const resolvedFont = CLOCK_FONT_MAP[configuredFont] || CLOCK_FONT_MAP.roboto;
+    root.style.setProperty('--font-time', resolvedFont);
+
+    // Font size
+    const configuredSize = Number(display.clock_font_size);
+    const desktopSize = Number.isFinite(configuredSize)
+        ? Math.max(120, Math.min(260, Math.round(configuredSize)))
+        : 180;
+    const mobileSize = Math.round(desktopSize * 0.67);
+root.style.setProperty('--clock-size-desktop', `${desktopSize}px`);
+        root.style.setProperty('--clock-size-mobile', `${mobileSize}px`);
+
+    // Font weight
+    const weightKey = (display.clock_font_weight || 'regular').toLowerCase();
+    const resolvedWeight = CLOCK_FONT_WEIGHT_MAP[weightKey] ?? 400;
+    root.style.setProperty('--font-weight-time', resolvedWeight);
+}
+
 // Simple element setters
 const setText = (id, value) => {
     const el = document.getElementById(id);
@@ -138,7 +230,7 @@ async function updateTimeAndDate() {
         if (dateEl) {
             const dateKey = `${timeData.day_of_week}|${timeData.date}`;
             if (dateKey !== lastDateKey) {
-                const dateHtml = `${timeData.day_of_week}<br>${timeData.date}`;
+                const dateHtml = `<span class="weekday">${timeData.day_of_week}</span><span class="date-value">${timeData.date}</span>`;
                 if (dateHtml !== lastDateHtml) {
                     dateEl.innerHTML = dateHtml;
                     lastDateHtml = dateHtml;
@@ -169,7 +261,22 @@ async function loadSettings() {
         console.error('Failed to load settings:', error);
         userSettings = {
             units: { temperature_unit: 'celsius', time_format: '24h', date_format: 'mdy', wind_speed_unit: 'kmh' },
-            display: { show_humidity_wind: true, show_precipitation_cloudiness: true, show_sunrise_sunset: true, show_debug: false },
+            display: {
+                show_humidity_wind: true,
+                show_precipitation_cloudiness: true,
+                show_sunrise_sunset: true,
+                show_location: true,
+                  show_debug: false,
+                clock_font: 'roboto',
+                clock_font_size: 180,
+                clock_font_weight: 'regular',
+                  weekday_font: 'great_vibes',
+                  weekday_font_size: 70,
+                  weekday_font_weight: 'thin',
+                  date_font: 'kaushan_script',
+                  date_font_size: 40,
+                  date_font_weight: 'medium',
+            },
             photos: { refresh_interval: 30, photo_quality: '80', enable_festive_queries: true }
         };
         updateTimeFormatCache();
@@ -209,6 +316,9 @@ function startTimeTicker() {
 // Apply display settings
 function applyDisplaySettings() {
     if (!userSettings) return;
+
+    applyClockTypographySettings();
+    applyWeekdayTypographySettings();
     
     const showSunriseSunset = userSettings.display.show_sunrise_sunset !== false;
     const showPrecipCloud = userSettings.display.show_precipitation_cloudiness !== false;
@@ -234,7 +344,10 @@ function applyDisplaySettings() {
     
     if (metricsGrid) metricsGrid.style.display = anyMetricsVisible ? 'grid' : 'none';
     if (mainWeatherStatus) mainWeatherStatus.classList.toggle('no-metrics', !anyMetricsVisible);
-    
+
+    const locationBadge = document.querySelector('.location-badge');
+    if (locationBadge) locationBadge.style.display = userSettings.display.show_location !== false ? '' : 'none';
+
     // Debug panel position
     const debugEl = document.getElementById('debug');
     if (debugEl) {
@@ -539,3 +652,25 @@ window.__TAURI__.event.listen('refresh-photo', () => window.refreshPhoto());
 
 console.log('%c🎨 Idleview', 'font-size: 14px; font-weight: bold; color: #4f46e5');
 console.log('%cCommands: refreshPhoto() | getSettings() | saveSettings(obj) | resetSettings() | reloadSettings()', 'color: #64748b');
+
+function loadGoogleFonts() {
+    ['https://fonts.googleapis.com', 'https://fonts.gstatic.com'].forEach(origin => {
+        const link = document.createElement('link');
+        link.rel = 'preconnect';
+        link.href = origin;
+        if (origin.includes('gstatic')) link.crossOrigin = '';
+        document.head.appendChild(link);
+    });
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    // Cormorant Garamond loads separately with display=block so it never shows a fallback swap
+    const cgLink = document.createElement('link');
+    cgLink.rel = 'stylesheet';
+    cgLink.href = 'https://fonts.googleapis.com/css2?family=Sacramento&family=Great+Vibes&family=Dancing+Script:wght@400;700&family=Pacifico&family=Satisfy&family=Pinyon+Script&family=Alex+Brush&family=Kaushan+Script&family=Italianno&display=block';
+    document.head.appendChild(cgLink);
+
+    link.href = 'https://fonts.googleapis.com/css2?family=Roboto:wght@100;300;400;500;700&family=Open+Sans:wght@300;400;500;600;700&family=Inter:wght@100;300;400;500;700&family=Montserrat:wght@100;200;300;400;500;700&family=Poppins:wght@100;200;300;400;500;700&family=Lato:wght@100;300;400;700&family=Noto+Sans+JP:wght@100;300;400;500;700&family=Arimo:wght@400;500;600;700&family=Roboto+Condensed:wght@100;300;400;500;700&family=Unbounded:wght@200;300;400;500;700&display=swap';
+    document.head.appendChild(link);
+}
+
+loadGoogleFonts();

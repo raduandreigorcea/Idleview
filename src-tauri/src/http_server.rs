@@ -77,10 +77,10 @@ async fn get_settings(State(state): State<AppState>) -> Result<Json<Settings>, A
 /// PUT /api/settings - Update all settings from JSON body
 async fn update_settings(
     State(state): State<AppState>,
-    Json(settings): Json<Settings>,
+    Json(updates): Json<serde_json::Value>,
 ) -> Result<Json<Settings>, AppError> {
-    match state.settings_manager.update_all(settings.clone()) {
-        Ok(_) => {
+    match state.settings_manager.update_partial(updates) {
+        Ok(settings) => {
             info!("Settings updated successfully");
             // Emit event to Tauri window
             let _ = state.app_handle.emit("settings-updated", &settings);

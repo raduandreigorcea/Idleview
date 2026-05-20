@@ -231,7 +231,7 @@ pub fn get_current_time_impl() -> FormattedTime {
         _ => now.format("%b %d, %Y").to_string(),      // Default to MDY
     };
     
-    let day_of_week = now.format("%A").to_string().to_uppercase();
+    let day_of_week = now.format("%A").to_string();
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()

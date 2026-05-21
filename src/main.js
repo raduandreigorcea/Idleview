@@ -254,7 +254,6 @@ function updateTimeFormatCache() {
 async function loadSettings() {
     try {
         userSettings = await invoke('get_settings');
-        console.log('Settings loaded:', userSettings);
         updateTimeFormatCache();
         applyDisplaySettings();
     } catch (error) {
@@ -285,13 +284,11 @@ async function loadSettings() {
 
 // Reload settings and refresh UI
 async function reloadSettings() {
-    console.log('🔄 Reloading settings...');
     await loadSettings();
     if (window.userLocation) {
         await updateWeather(window.userLocation);
     }
     await updateTimeAndDate();
-    console.log('✅ Settings reloaded and UI updated!');
 }
 
 function startTimeTicker() {
@@ -348,12 +345,6 @@ function applyDisplaySettings() {
     const locationBadge = document.querySelector('.location-badge');
     if (locationBadge) locationBadge.style.display = userSettings.display.show_location !== false ? '' : 'none';
 
-    // Debug panel position
-    const debugEl = document.getElementById('debug');
-    if (debugEl) {
-        const position = userSettings.display.debug_position || 'right';
-        debugEl.dataset.position = position;
-    }
 }
 
 // Cache helpers
@@ -449,9 +440,6 @@ async function displayPhoto(photo, timestamp = null, query = null) {
         const debugEl = document.getElementById('debug');
         if (debugEl) {
             debugEl.style.display = 'grid';
-            const position = userSettings.display.debug_position || 'right';
-            debugEl.dataset.position = position;
-            
             const renderDebug = async () => {
                 try {
                     const cached = getCachedPhoto();
@@ -517,12 +505,10 @@ async function fetchUnsplashPhoto(forceRefresh = false) {
         }
         
         if (!currentWeather) {
-            console.log('Waiting for weather data before fetching photo...');
             return;
         }
         
         if (prefetchedPhoto && !forceRefresh) {
-            console.log('Using prefetched photo');
             cachePhoto(prefetchedPhoto.photo, prefetchedPhoto.query);
             await displayPhoto(prefetchedPhoto.photo, Date.now(), prefetchedPhoto.query);
             prefetchedPhoto = null;
@@ -534,10 +520,8 @@ async function fetchUnsplashPhoto(forceRefresh = false) {
         if (!queryParams) return;
         
         const queryResult = await invoke('build_photo_query', queryParams);
-        console.log(`📸 Fetching Photo | Query: "${queryResult.query}" | ${window.innerWidth}x${window.innerHeight}`);
         
         const photo = await fetchPhotoWithQuery(queryResult.query);
-        console.log(`✅ Photo Ready | ${photo.author}`);
         
         cachePhoto(photo, queryResult.query);
         await displayPhoto(photo, Date.now(), queryResult.query);
@@ -556,14 +540,12 @@ async function prefetchNextPhoto() {
     if (!currentWeather) return;
     
     try {
-        console.log('Prefetching next photo...');
         const queryParams = buildPhotoQueryParams();
         if (!queryParams) return;
         
         const queryResult = await invoke('build_photo_query', queryParams);
         const photo = await fetchPhotoWithQuery(queryResult.query);
         prefetchedPhoto = { photo, query: queryResult.query };
-        console.log('Photo prefetched successfully');
     } catch (error) {
         console.error('Failed to prefetch photo:', error);
     }
@@ -585,7 +567,6 @@ async function checkPhotoContext() {
         
         const isValid = await invoke('is_cache_valid', { cacheTimestamp: cached.timestamp });
         if (!isValid) {
-            console.log('⏰ Cache expired, refreshing...');
             await fetchUnsplashPhoto(true);
         }
     } catch (error) {
@@ -600,7 +581,6 @@ async function checkPhotoContext() {
     // Show cached photo immediately
     const cached = getCachedPhoto();
     if (cached) {
-        console.log('📷 Displaying cached photo...');
         await displayPhoto(cached.photo, cached.timestamp, cached.query);
     }
     
@@ -624,7 +604,6 @@ async function checkPhotoContext() {
     
     // Listen for settings updates from HTTP API
     await window.__TAURI__.event.listen('settings-updated', async () => {
-        console.log('⚡ Settings updated via API');
         await reloadSettings();
     });
 
@@ -642,7 +621,53 @@ window.refreshPhoto = async function() {
     console.log('✅ Photo refreshed!');
 };
 
-window.getSettings = () => invoke('get_settings').then(s => { console.log(s); return s; });
+window.getSettings = () => invoke('get_settings').then(s => {
+    console.group('%c⚙️ Idleview Settings', 'font-weight: bold; color: #4f46e5');
+
+    console.group('📐 Units');
+    console.table({
+        temperature_unit: s.units.temperature_unit,
+        time_format:      s.units.time_format,
+        date_format:      s.units.date_format,
+        wind_speed_unit:  s.units.wind_speed_unit,
+    });
+    console.groupEnd();
+
+    console.group('🖥️ Display');
+    console.table({
+        show_humidity_wind:            s.display.show_humidity_wind,
+        show_precipitation_cloudiness: s.display.show_precipitation_cloudiness,
+        show_sunrise_sunset:           s.display.show_sunrise_sunset,
+        show_location:                 s.display.show_location,
+        show_debug:                    s.display.show_debug,
+    });
+    console.groupEnd();
+
+    console.group('🔤 Fonts');
+    console.table({
+        clock_font:         s.display.clock_font,
+        clock_font_size:    s.display.clock_font_size,
+        clock_font_weight:  s.display.clock_font_weight,
+        weekday_font:       s.display.weekday_font,
+        weekday_font_size:  s.display.weekday_font_size,
+        weekday_font_weight: s.display.weekday_font_weight,
+        date_font:          s.display.date_font,
+        date_font_size:     s.display.date_font_size,
+        date_font_weight:   s.display.date_font_weight,
+    });
+    console.groupEnd();
+
+    console.group('📷 Photos');
+    console.table({
+        refresh_interval:      s.photos.refresh_interval,
+        photo_quality:         s.photos.photo_quality,
+        enable_festive_queries: s.photos.enable_festive_queries,
+    });
+    console.groupEnd();
+
+    console.groupEnd();
+    return s;
+});
 window.saveSettings = s => invoke('save_settings', { settings: s }).then(() => console.log('✅ Saved!'));
 window.resetSettings = () => invoke('reset_settings').then(s => { console.log('✅ Reset!', s); return s; });
 window.reloadSettings = reloadSettings;

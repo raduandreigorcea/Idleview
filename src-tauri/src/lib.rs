@@ -302,11 +302,6 @@ pub fn format_time_remaining_impl(milliseconds: i64) -> String {
 // ===== Tauri Commands (wrappers) =====
 
 #[tauri::command]
-fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
-}
-
-#[tauri::command]
 fn get_settings() -> Result<Settings, String> {
     settings_manager::read_settings()
 }
@@ -862,7 +857,6 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            greet,
             get_location,
             get_weather,
             get_unsplash_photo,

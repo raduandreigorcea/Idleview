@@ -25,13 +25,10 @@ pub struct DisplaySettings {
     pub show_humidity_wind: bool,
     pub show_precipitation_cloudiness: bool,
     pub show_sunrise_sunset: bool,
-    pub show_cpu_temp: bool,
     #[serde(default = "default_show_location")]
     pub show_location: bool,
     #[serde(default)]
     pub show_debug: bool,
-    #[serde(default = "default_debug_position")]
-    pub debug_position: String,  // "left" or "right"
     #[serde(default = "default_clock_font")]
     pub clock_font: String,
     #[serde(default = "default_clock_font_size")]
@@ -53,10 +50,6 @@ pub struct DisplaySettings {
 }
 
 fn default_show_location() -> bool { true }
-
-fn default_debug_position() -> String {
-    "right".to_string()
-}
 
 fn default_clock_font() -> String {
     "roboto".to_string()
@@ -148,10 +141,8 @@ impl Default for Settings {
                 show_humidity_wind: true,
                 show_precipitation_cloudiness: true,
                 show_sunrise_sunset: true,
-                show_cpu_temp: false,
                 show_location: true,
                 show_debug: false,
-                debug_position: "right".to_string(),
                 clock_font: default_clock_font(),
                 clock_font_size: default_clock_font_size(),
                 clock_font_weight: default_clock_font_weight(),

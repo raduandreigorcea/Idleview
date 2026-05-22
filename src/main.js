@@ -2,22 +2,21 @@ const invoke = window.__TAURI__.core.invoke;
 
 // Store state
 let currentWeather = null;
-let currentPhotoUrl = null;
 let creditTimeout = null;
 let debugInterval = null;
 let prefetchedPhoto = null;
 let userSettings = null;
 let lastCacheValid = null;
-let lastPhotoFetchError = null;
 let timeInterval = null;
 let timeTimeout = null;
 let lastTimeHtml = null;
-let lastDateHtml = null;
 let lastDateKey = null;
 let sunriseSunsetTimeFormat = null;
 let sunriseSunsetIs12h = false;
+let weatherTimeout = null;
+let lastPrecipState = null;
 
-const CLOCK_FONT_MAP = {
+const SANS_FONT_MAP = {
     roboto: "'Roboto', sans-serif",
     open_sans: "'Open Sans', sans-serif",
     google_sans: "'Google Sans', 'Product Sans', sans-serif",
@@ -32,7 +31,7 @@ const CLOCK_FONT_MAP = {
     space_grotesk: "'Space Grotesk', sans-serif",
 };
 
-const CLOCK_FONT_WEIGHT_MAP = {
+const FONT_WEIGHT_MAP = {
     thin: 200,
     light: 300,
     regular: 400,
@@ -41,7 +40,7 @@ const CLOCK_FONT_WEIGHT_MAP = {
     bold: 700,
 };
 
-const WEEKDAY_FONT_MAP = {
+const CURSIVE_FONT_MAP = {
     sacramento:     "'Sacramento', cursive",
     great_vibes:    "'Great Vibes', cursive",
     dancing_script: "'Dancing Script', cursive",
@@ -60,26 +59,26 @@ function applyWeekdayTypographySettings() {
 
     // Weekday font family
     const weekdayKey = (display.weekday_font || 'great_vibes').toLowerCase();
-    root.style.setProperty('--font-weekday', WEEKDAY_FONT_MAP[weekdayKey] || WEEKDAY_FONT_MAP.sacramento);
+    root.style.setProperty('--font-weekday', CURSIVE_FONT_MAP[weekdayKey] || CURSIVE_FONT_MAP.sacramento);
 
     // Weekday font size
     const wSize = Math.max(16, Math.min(120, Number(display.weekday_font_size) || 70));
     root.style.setProperty('--font-size-weekday', `${wSize}px`);
 
     // Weekday font weight
-    const wWeight = CLOCK_FONT_WEIGHT_MAP[(display.weekday_font_weight || 'thin').toLowerCase()] ?? 200;
+    const wWeight = FONT_WEIGHT_MAP[(display.weekday_font_weight || 'thin').toLowerCase()] ?? 200;
     root.style.setProperty('--font-weight-weekday', wWeight);
 
     // Date font family (checks both sans-serif and cursive/script pools)
     const dateKey = (display.date_font || 'kaushan_script').toLowerCase();
-    root.style.setProperty('--font-date', CLOCK_FONT_MAP[dateKey] || WEEKDAY_FONT_MAP[dateKey] || CLOCK_FONT_MAP.space_grotesk);
+    root.style.setProperty('--font-date', SANS_FONT_MAP[dateKey] || CURSIVE_FONT_MAP[dateKey] || SANS_FONT_MAP.space_grotesk);
 
     // Date font size
     const dSize = Math.max(16, Math.min(120, Number(display.date_font_size) || 40));
     root.style.setProperty('--font-size-date', `${dSize}px`);
 
     // Date font weight
-    const dWeight = CLOCK_FONT_WEIGHT_MAP[(display.date_font_weight || 'medium').toLowerCase()] ?? 500;
+    const dWeight = FONT_WEIGHT_MAP[(display.date_font_weight || 'medium').toLowerCase()] ?? 500;
     root.style.setProperty('--font-weight-date', dWeight);
 }
 
@@ -91,7 +90,7 @@ function applyClockTypographySettings() {
 
     // Font family
     const configuredFont = (display.clock_font || 'roboto').toLowerCase();
-    const resolvedFont = CLOCK_FONT_MAP[configuredFont] || CLOCK_FONT_MAP.roboto;
+    const resolvedFont = SANS_FONT_MAP[configuredFont] || SANS_FONT_MAP.roboto;
     root.style.setProperty('--font-time', resolvedFont);
 
     // Font size
@@ -99,13 +98,11 @@ function applyClockTypographySettings() {
     const desktopSize = Number.isFinite(configuredSize)
         ? Math.max(120, Math.min(260, Math.round(configuredSize)))
         : 180;
-    const mobileSize = Math.round(desktopSize * 0.67);
-root.style.setProperty('--clock-size-desktop', `${desktopSize}px`);
-        root.style.setProperty('--clock-size-mobile', `${mobileSize}px`);
+    root.style.setProperty('--clock-size-desktop', `${desktopSize}px`);
 
     // Font weight
     const weightKey = (display.clock_font_weight || 'regular').toLowerCase();
-    const resolvedWeight = CLOCK_FONT_WEIGHT_MAP[weightKey] ?? 400;
+    const resolvedWeight = FONT_WEIGHT_MAP[weightKey] ?? 400;
     root.style.setProperty('--font-weight-time', resolvedWeight);
 }
 
@@ -115,10 +112,7 @@ const setText = (id, value) => {
     if (el && el.textContent !== value) el.textContent = value;
 };
 
-const setHTML = (id, value) => {
-    const el = document.getElementById(id);
-    if (el && el.innerHTML !== value) el.innerHTML = value;
-};
+
 
 // Update weather display
 function updateWeatherDisplay(weather) {
@@ -191,19 +185,38 @@ async function fetchLocation() {
     }
 }
 
-// Update weather data
+function getPrecipState(weather) {
+    const c = weather.weathercode ?? -1;
+    if (weather.snowfall > 0 || (c >= 71 && c <= 77) || c === 85 || c === 86) return 'snow';
+    if (weather.rain > 0 || (c >= 51 && c <= 67) || (c >= 80 && c <= 82) || c >= 95) return 'rain';
+    return 'none';
+}
+
+// Update weather data (self-scheduling: 15 min normally, 5 min if precip state changed)
 async function updateWeather(location) {
+    if (weatherTimeout) {
+        clearTimeout(weatherTimeout);
+        weatherTimeout = null;
+    }
     try {
         const weather = await retryWithBackoff(() => invoke('get_weather', {
             latitude: location.latitude,
             longitude: location.longitude
         }));
+
+        const newPrecipState = getPrecipState(weather);
+        const precipChanged = lastPrecipState !== null && lastPrecipState !== newPrecipState;
+        lastPrecipState = newPrecipState;
+
         updateWeatherDisplay(weather);
         await fetchUnsplashPhoto();
+
+        // Poll sooner if precipitation just started or stopped, otherwise every 15 min
+        const delay = precipChanged ? 5 * 60 * 1000 : 15 * 60 * 1000;
+        weatherTimeout = setTimeout(() => updateWeather(location), delay);
     } catch (error) {
         console.error('Failed to fetch weather after retries:', error);
-        // Schedule another attempt in 30 seconds
-        setTimeout(() => updateWeather(location), 30000);
+        weatherTimeout = setTimeout(() => updateWeather(location), 30000);
     }
 }
 
@@ -217,8 +230,6 @@ async function updateTimeAndDate() {
             let timeText = timeData.time;
             if (timeText.includes('AM') || timeText.includes('PM')) {
                 timeText = timeText.replace(/\s?(AM|PM)/, '<span class="time-period">$1</span>');
-            } else {
-                timeText = timeText;
             }
             if (timeText !== lastTimeHtml) {
                 timeEl.innerHTML = timeText;
@@ -230,11 +241,7 @@ async function updateTimeAndDate() {
         if (dateEl) {
             const dateKey = `${timeData.day_of_week}|${timeData.date}`;
             if (dateKey !== lastDateKey) {
-                const dateHtml = `<span class="weekday">${timeData.day_of_week}</span><span class="date-value">${timeData.date}</span>`;
-                if (dateHtml !== lastDateHtml) {
-                    dateEl.innerHTML = dateHtml;
-                    lastDateHtml = dateHtml;
-                }
+                dateEl.innerHTML = `<span class="weekday">${timeData.day_of_week}</span><span class="date-value">${timeData.date}</span>`;
                 lastDateKey = dateKey;
             }
         }
@@ -374,7 +381,9 @@ function buildPhotoQueryParams() {
     return {
         cloudcover: currentWeather.cloudcover,
         rain: currentWeather.rain,
+        showers: currentWeather.showers,
         snowfall: currentWeather.snowfall,
+        weathercode: currentWeather.weathercode,
         sunriseIso: currentWeather.sunrise,
         sunsetIso: currentWeather.sunset,
         enableFestive: userSettings?.photos?.enable_festive_queries ?? true
@@ -391,8 +400,7 @@ async function fetchPhotoWithQuery(query) {
 }
 
 // Display photo
-async function displayPhoto(photo, timestamp = null, query = null) {
-    currentPhotoUrl = photo.url;
+async function displayPhoto(photo) {
     
     // Preload image
     const img = new Image();
@@ -499,7 +507,7 @@ async function fetchUnsplashPhoto(forceRefresh = false) {
         if (!forceRefresh && cached) {
             lastCacheValid = await invoke('is_cache_valid', { cacheTimestamp: cached.timestamp });
             if (lastCacheValid) {
-                await displayPhoto(cached.photo, cached.timestamp, cached.query);
+                await displayPhoto(cached.photo);
                 return;
             }
         }
@@ -510,9 +518,8 @@ async function fetchUnsplashPhoto(forceRefresh = false) {
         
         if (prefetchedPhoto && !forceRefresh) {
             cachePhoto(prefetchedPhoto.photo, prefetchedPhoto.query);
-            await displayPhoto(prefetchedPhoto.photo, Date.now(), prefetchedPhoto.query);
+            await displayPhoto(prefetchedPhoto.photo);
             prefetchedPhoto = null;
-            lastPhotoFetchError = null;
             return;
         }
         
@@ -524,14 +531,12 @@ async function fetchUnsplashPhoto(forceRefresh = false) {
         const photo = await fetchPhotoWithQuery(queryResult.query);
         
         cachePhoto(photo, queryResult.query);
-        await displayPhoto(photo, Date.now(), queryResult.query);
-        lastPhotoFetchError = null;
+        await displayPhoto(photo);
         
     } catch (error) {
-        lastPhotoFetchError = error?.message || error?.toString() || 'Unknown error';
         console.error('Failed to fetch Unsplash photo:', error);
         const cached = getCachedPhoto();
-        if (cached) await displayPhoto(cached.photo, cached.timestamp, cached.query);
+        if (cached) await displayPhoto(cached.photo);
     }
 }
 
@@ -581,7 +586,7 @@ async function checkPhotoContext() {
     // Show cached photo immediately
     const cached = getCachedPhoto();
     if (cached) {
-        await displayPhoto(cached.photo, cached.timestamp, cached.query);
+        await displayPhoto(cached.photo);
     }
     
     // Start UI updates
@@ -591,13 +596,6 @@ async function checkPhotoContext() {
     window.userLocation = null;
     await fetchLocation();
     
-    // Periodic weather refresh
-    setInterval(() => {
-        if (window.userLocation) {
-            updateWeather(window.userLocation);
-        }
-    }, 15 * 60 * 1000);
-
     // Photo refresh check
     checkPhotoContext();
     setInterval(checkPhotoContext, 5 * 60 * 1000);

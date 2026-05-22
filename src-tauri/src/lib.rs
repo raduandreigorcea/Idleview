@@ -138,7 +138,9 @@ pub fn get_time_of_day_impl(sunrise_iso: Option<String>, sunset_iso: Option<Stri
 pub fn build_photo_query_impl(
     cloudcover: f64,
     rain: f64,
+    showers: f64,
     snowfall: f64,
+    weathercode: i32,
     sunrise_iso: Option<String>,
     sunset_iso: Option<String>,
     enable_festive: Option<bool>,
@@ -169,9 +171,9 @@ pub fn build_photo_query_impl(
         }
     }
     
-    // Determine precipitation type
-    let has_snow = snowfall > 0.5;
-    let has_rain = rain > 0.5;
+    // Determine precipitation type (use weathercode as fallback for freshly-started precip)
+    let has_snow = snowfall > 0.5 || matches!(weathercode, 71..=77 | 85 | 86);
+    let has_rain = (rain + showers) > 0.5 || matches!(weathercode, 51..=67 | 80..=82 | 95..=99);
     
     // Priority: time of day > season > precipitation
     // Night/dawn/dusk are "special" times that override season focus
@@ -246,23 +248,119 @@ pub fn get_current_time_impl() -> FormattedTime {
 }
 
 pub fn get_precipitation_display_impl(weather: WeatherData) -> PrecipitationDisplay {
-    if weather.snowfall > 0.0 {
-        PrecipitationDisplay {
+    let liquid_mm = weather.rain + weather.showers;
+
+    let rain_value = if liquid_mm > 0.0 {
+        format!("{:.1} mm", liquid_mm)
+    } else {
+        "< 0.1 mm".to_string()
+    };
+    let snow_value = if weather.snowfall > 0.0 {
+        format!("{:.1} cm", weather.snowfall)
+    } else {
+        "< 0.1 cm".to_string()
+    };
+
+    match weather.weathercode {
+        // Thunderstorm (with or without hail)
+        95..=99 => PrecipitationDisplay {
+            icon: "droplets.svg".to_string(),
+            label: "Thunder".to_string(),
+            value: rain_value,
+        },
+        // Heavy rain showers
+        82 => PrecipitationDisplay {
+            icon: "droplets.svg".to_string(),
+            label: "Heavy Shower".to_string(),
+            value: rain_value,
+        },
+        // Rain showers
+        80 | 81 => PrecipitationDisplay {
+            icon: "droplets.svg".to_string(),
+            label: "Shower".to_string(),
+            value: rain_value,
+        },
+        // Snow showers
+        85 | 86 => PrecipitationDisplay {
             icon: "snowflake.svg".to_string(),
-            label: "Snow".to_string(),
-            value: format!("{:.1} cm", weather.snowfall),
-        }
-    } else if weather.rain > 0.0 {
-        PrecipitationDisplay {
+            label: "Snow Shower".to_string(),
+            value: snow_value,
+        },
+        // Freezing rain / sleet
+        56 | 57 | 66 | 67 => PrecipitationDisplay {
+            icon: "droplet.svg".to_string(),
+            label: "Sleet".to_string(),
+            value: rain_value,
+        },
+        // Heavy rain
+        65 => PrecipitationDisplay {
+            icon: "droplets.svg".to_string(),
+            label: "Heavy Rain".to_string(),
+            value: rain_value,
+        },
+        // Moderate rain
+        63 => PrecipitationDisplay {
             icon: "droplets.svg".to_string(),
             label: "Rain".to_string(),
-            value: format!("{:.1} mm", weather.rain),
-        }
-    } else {
-        PrecipitationDisplay {
-            icon: "umbrella.svg".to_string(),
-            label: "Precip".to_string(),
-            value: "Clear".to_string(),
+            value: rain_value,
+        },
+        // Slight rain
+        61 => PrecipitationDisplay {
+            icon: "droplet.svg".to_string(),
+            label: "Light Rain".to_string(),
+            value: rain_value,
+        },
+        // Dense drizzle
+        55 => PrecipitationDisplay {
+            icon: "droplet.svg".to_string(),
+            label: "Drizzle".to_string(),
+            value: rain_value,
+        },
+        // Moderate / light drizzle
+        51 | 53 => PrecipitationDisplay {
+            icon: "droplet.svg".to_string(),
+            label: "Drizzle".to_string(),
+            value: rain_value,
+        },
+        // Heavy snow
+        75 => PrecipitationDisplay {
+            icon: "snowflake.svg".to_string(),
+            label: "Heavy Snow".to_string(),
+            value: snow_value,
+        },
+        // Snow / snow grains
+        71 | 73 | 77 => PrecipitationDisplay {
+            icon: "snowflake.svg".to_string(),
+            label: "Snow".to_string(),
+            value: snow_value,
+        },
+        // Fog / rime fog
+        45 | 48 => PrecipitationDisplay {
+            icon: "cloud-fog.svg".to_string(),
+            label: "Fog".to_string(),
+            value: "Active".to_string(),
+        },
+        // Fallback: use measured values if present, otherwise Clear
+        _ => {
+            if weather.snowfall > 0.0 {
+                PrecipitationDisplay {
+                    icon: "snowflake.svg".to_string(),
+                    label: "Snow".to_string(),
+                    value: format!("{:.1} cm", weather.snowfall),
+                }
+            } else if liquid_mm > 0.0 {
+                PrecipitationDisplay {
+                    icon: "droplets.svg".to_string(),
+                    label: "Rain".to_string(),
+                    value: format!("{:.1} mm", liquid_mm),
+                }
+            } else {
+                PrecipitationDisplay {
+                    icon: "umbrella.svg".to_string(),
+                    label: "Precip".to_string(),
+                    value: "Clear".to_string(),
+                }
+            }
         }
     }
 }
@@ -380,7 +478,9 @@ pub struct WeatherData {
     pub wind_speed_label: String,
     pub cloudcover: f64,
     pub rain: f64,
+    pub showers: f64,
     pub snowfall: f64,
+    pub weathercode: i32,
     pub sunrise: String,
     pub sunset: String,
     pub timezone: String,
@@ -398,9 +498,11 @@ struct OpenMeteoCurrentData {
     temperature_2m: f64,
     relative_humidity_2m: f64,
     rain: f64,
+    showers: f64,
     snowfall: f64,
     cloudcover: f64,
     wind_speed_10m: f64,
+    weathercode: i32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -494,7 +596,7 @@ async fn get_weather(latitude: f64, longitude: f64) -> Result<WeatherData, Strin
     let settings = get_settings().unwrap_or_default();
     
     let url = format!(
-        "https://api.open-meteo.com/v1/forecast?latitude={}&longitude={}&current=temperature_2m,relative_humidity_2m,rain,snowfall,cloudcover,wind_speed_10m&daily=sunrise,sunset&timezone=auto",
+        "https://api.open-meteo.com/v1/forecast?latitude={}&longitude={}&current=temperature_2m,relative_humidity_2m,rain,showers,snowfall,cloudcover,wind_speed_10m,weathercode&daily=sunrise,sunset&timezone=auto",
         latitude, longitude
     );
     
@@ -538,7 +640,9 @@ async fn get_weather(latitude: f64, longitude: f64) -> Result<WeatherData, Strin
         wind_speed_label,
         cloudcover: data.current.cloudcover,
         rain: data.current.rain,
+        showers: data.current.showers,
         snowfall: data.current.snowfall,
+        weathercode: data.current.weathercode,
         sunrise: data.daily.sunrise.get(0).cloned().unwrap_or_default(),
         sunset: data.daily.sunset.get(0).cloned().unwrap_or_default(),
         timezone: data.timezone,
@@ -580,12 +684,14 @@ fn get_time_of_day(sunrise_iso: Option<String>, sunset_iso: Option<String>) -> T
 fn build_photo_query(
     cloudcover: f64,
     rain: f64,
+    showers: f64,
     snowfall: f64,
+    weathercode: i32,
     sunrise_iso: Option<String>,
     sunset_iso: Option<String>,
     enable_festive: Option<bool>,
 ) -> PhotoQuery {
-    build_photo_query_impl(cloudcover, rain, snowfall, sunrise_iso, sunset_iso, enable_festive)
+    build_photo_query_impl(cloudcover, rain, showers, snowfall, weathercode, sunrise_iso, sunset_iso, enable_festive)
 }
 
 #[tauri::command]

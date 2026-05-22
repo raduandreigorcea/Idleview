@@ -761,12 +761,10 @@ fn get_debug_info(
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_millis() as u64;
-    
+
     let photo_age = if let Some(ts) = cache_timestamp {
-        // Use saturating_sub to avoid overflow if timestamp is in the future
         let diff = now.saturating_sub(ts);
         let seconds = diff / 1000;
-        
         if seconds < 60 {
             format!("{}s ago", seconds)
         } else {
@@ -785,34 +783,26 @@ fn get_debug_info(
     } else {
         "unknown".to_string()
     };
-    
+
     let query_str = query.unwrap_or_else(|| "n/a".to_string());
-    
-    // Get time of day info
     let tod = get_time_of_day(sunrise_iso.clone(), sunset_iso.clone());
-    
-    // Get season
     let season_info = get_season();
-    
-    // Check API key availability
+
     let (api_key_status, api_key_source) = match std::env::var("UNSPLASH_ACCESS_KEY") {
         Ok(key) if key.len() > 10 && key != "YOUR_UNSPLASH_ACCESS_KEY" => {
             ("Available".to_string(), "Runtime env".to_string())
         },
-        _ => {
-            match option_env!("UNSPLASH_ACCESS_KEY") {
-                Some(key) if key.len() > 10 && key != "YOUR_UNSPLASH_ACCESS_KEY" => {
-                    ("Available".to_string(), "Compile-time".to_string())
-                },
-                _ => ("Missing or invalid".to_string(), "None".to_string())
-            }
-        }
+        _ => match option_env!("UNSPLASH_ACCESS_KEY") {
+            Some(key) if key.len() > 10 && key != "YOUR_UNSPLASH_ACCESS_KEY" => {
+                ("Available".to_string(), "Compile-time".to_string())
+            },
+            _ => ("Missing or invalid".to_string(), "None".to_string()),
+        },
     };
-    
-    // Get settings for temperature unit
+
     let settings = get_settings().unwrap_or_default();
     let temp_unit = settings.units.temperature_unit.as_str();
-    
+
     DebugInfo {
         photo_age,
         query: query_str,
@@ -821,11 +811,7 @@ fn get_debug_info(
         api_key_status,
         api_key_source,
         temperature: temperature.map(|t| {
-            if temp_unit == "fahrenheit" {
-                format!("{:.1}°F", t)
-            } else {
-                format!("{:.1}°C", t)
-            }
+            if temp_unit == "fahrenheit" { format!("{:.1}\u{00b0}F", t) } else { format!("{:.1}\u{00b0}C", t) }
         }).unwrap_or_else(|| "n/a".to_string()),
         rain: rain.map(|r| format!("{:.1}mm", r)).unwrap_or_else(|| "n/a".to_string()),
         snowfall: snowfall.map(|s| format!("{:.1}cm", s)).unwrap_or_else(|| "n/a".to_string()),

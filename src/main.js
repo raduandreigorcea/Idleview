@@ -3,8 +3,8 @@ const invoke = window.__TAURI__.core.invoke;
 // Store state
 let currentWeather = null;
 let currentPhotoUrl = null;
-let debugInterval = null;
 let creditTimeout = null;
+let debugInterval = null;
 let prefetchedPhoto = null;
 let userSettings = null;
 let lastCacheValid = null;
@@ -266,7 +266,7 @@ async function loadSettings() {
                 show_sunrise_sunset: true,
                 show_location: true,
                   show_debug: false,
-                clock_font: 'roboto',
+                  clock_font: 'roboto',
                 clock_font_size: 180,
                 clock_font_weight: 'regular',
                   weekday_font: 'great_vibes',
@@ -453,7 +453,7 @@ async function displayPhoto(photo, timestamp = null, query = null) {
                         snowfall: currentWeather?.snowfall,
                         cloudcover: currentWeather?.cloudcover
                     });
-                    
+
                     let nextRefreshDisplay = 'N/A';
                     if (cached?.timestamp) {
                         const refreshInterval = getRefreshIntervalMs();
@@ -461,7 +461,7 @@ async function displayPhoto(photo, timestamp = null, query = null) {
                         const timeUntilRefresh = Math.max(0, refreshInterval - cacheAge);
                         nextRefreshDisplay = Math.floor(timeUntilRefresh / 1000) + 's';
                     }
-                    
+
                     debugEl.innerHTML = `
                         <div>Photo cached: ${debugInfo.photo_age}</div>
                         <div>Query: ${debugInfo.query}</div>

@@ -22,6 +22,14 @@ pub struct UnitsSettings {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DisplaySettings {
+    #[serde(default = "default_show_clock")]
+    pub show_clock: bool,
+    #[serde(default = "default_show_date")]
+    pub show_date: bool,
+    #[serde(default = "default_show_weekday")]
+    pub show_weekday: bool,
+    #[serde(default = "default_show_temperature")]
+    pub show_temperature: bool,
     pub show_humidity_wind: bool,
     pub show_precipitation_cloudiness: bool,
     pub show_sunrise_sunset: bool,
@@ -50,6 +58,10 @@ pub struct DisplaySettings {
 }
 
 fn default_show_location() -> bool { true }
+fn default_show_clock() -> bool { true }
+fn default_show_date() -> bool { true }
+fn default_show_weekday() -> bool { true }
+fn default_show_temperature() -> bool { true }
 
 fn default_clock_font() -> String {
     "roboto".to_string()
@@ -138,6 +150,10 @@ impl Default for Settings {
                 wind_speed_unit: "kmh".to_string(),
             },
             display: DisplaySettings {
+                show_clock: true,
+                show_date: true,
+                show_weekday: true,
+                show_temperature: true,
                 show_humidity_wind: true,
                 show_precipitation_cloudiness: true,
                 show_sunrise_sunset: true,
@@ -331,6 +347,10 @@ mod tests {
     #[test]
     fn test_default_settings() {
         let settings = Settings::default();
+        assert!(settings.display.show_clock);
+        assert!(settings.display.show_date);
+        assert!(settings.display.show_weekday);
+        assert!(settings.display.show_temperature);
         assert_eq!(settings.units.temperature_unit, "celsius");
         assert_eq!(settings.photos.refresh_interval, 30);
     }

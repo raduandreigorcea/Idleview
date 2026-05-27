@@ -268,6 +268,10 @@ async function loadSettings() {
         userSettings = {
             units: { temperature_unit: 'celsius', time_format: '24h', date_format: 'mdy', wind_speed_unit: 'kmh' },
             display: {
+                show_clock: true,
+                show_date: true,
+                show_weekday: true,
+                show_temperature: true,
                 show_humidity_wind: true,
                 show_precipitation_cloudiness: true,
                 show_sunrise_sunset: true,
@@ -324,10 +328,33 @@ function applyDisplaySettings() {
     applyClockTypographySettings();
     applyWeekdayTypographySettings();
     
+    const showClock = userSettings.display.show_clock !== false;
+    const showDate = userSettings.display.show_date !== false;
+    const showWeekday = userSettings.display.show_weekday !== false;
+    const showTemperature = userSettings.display.show_temperature !== false;
     const showSunriseSunset = userSettings.display.show_sunrise_sunset !== false;
     const showPrecipCloud = userSettings.display.show_precipitation_cloudiness !== false;
     const showHumidityWind = userSettings.display.show_humidity_wind !== false;
     const anyMetricsVisible = showSunriseSunset || showPrecipCloud || showHumidityWind;
+    const showBottomSection = showTemperature || anyMetricsVisible;
+
+    const clockEl = document.getElementById('time');
+    if (clockEl) clockEl.style.display = showClock ? '' : 'none';
+
+    const dateEl = document.getElementById('date');
+    if (dateEl) dateEl.style.display = showDate || showWeekday ? '' : 'none';
+
+    const weekdayEl = document.querySelector('#date .weekday');
+    if (weekdayEl) weekdayEl.style.display = showWeekday ? '' : 'none';
+
+    const dateValueEl = document.querySelector('#date .date-value');
+    if (dateValueEl) dateValueEl.style.display = showDate ? '' : 'none';
+
+    const bottomSection = document.querySelector('.bottom-section');
+    if (bottomSection) bottomSection.style.display = showBottomSection ? 'flex' : 'none';
+
+    const mainWeatherStatus = document.querySelector('.main-weather-status');
+    if (mainWeatherStatus) mainWeatherStatus.style.display = showTemperature ? 'flex' : 'none';
     
     const metricsMap = {
         'sunrise': showSunriseSunset,
@@ -344,7 +371,6 @@ function applyDisplaySettings() {
     });
     
     const metricsGrid = document.querySelector('.metrics-grid');
-    const mainWeatherStatus = document.querySelector('.main-weather-status');
     
     if (metricsGrid) metricsGrid.style.display = anyMetricsVisible ? 'grid' : 'none';
     if (mainWeatherStatus) mainWeatherStatus.classList.toggle('no-metrics', !anyMetricsVisible);
@@ -633,6 +659,10 @@ window.getSettings = () => invoke('get_settings').then(s => {
 
     console.group('🖥️ Display');
     console.table({
+        show_clock:                    s.display.show_clock,
+        show_date:                     s.display.show_date,
+        show_weekday:                  s.display.show_weekday,
+        show_temperature:              s.display.show_temperature,
         show_humidity_wind:            s.display.show_humidity_wind,
         show_precipitation_cloudiness: s.display.show_precipitation_cloudiness,
         show_sunrise_sunset:           s.display.show_sunrise_sunset,

@@ -21,6 +21,8 @@
   "bundle": {
     "active": true,
     "targets": [
+      "nsis",
+      "msi",
       "deb",
       "rpm"
     ],

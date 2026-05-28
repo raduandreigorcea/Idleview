@@ -92,6 +92,8 @@ pub struct PhotosSettings {
     pub photo_quality: String,  // Accepts both "85" string or 85 number
     #[serde(default = "default_enable_festive")]
     pub enable_festive_queries: bool,  // Enable holiday/festive photo themes
+    #[serde(default)]
+    pub custom_query: String,  // If non-empty, replaces generated query
 }
 
 fn default_enable_festive() -> bool {
@@ -173,6 +175,7 @@ impl Default for Settings {
                 refresh_interval: 30,
                 photo_quality: "80".to_string(),
                 enable_festive_queries: true,
+                custom_query: String::new(),
             },
         }
     }
@@ -353,6 +356,7 @@ mod tests {
         assert!(settings.display.show_temperature);
         assert_eq!(settings.units.temperature_unit, "celsius");
         assert_eq!(settings.photos.refresh_interval, 30);
+        assert!(settings.photos.custom_query.is_empty());
     }
 
     #[test]

@@ -276,18 +276,18 @@ async function loadSettings() {
                 show_precipitation_cloudiness: true,
                 show_sunrise_sunset: true,
                 show_location: true,
-                  show_debug: false,
-                  clock_font: 'roboto',
+                show_debug: false,
+                clock_font: 'roboto',
                 clock_font_size: 180,
                 clock_font_weight: 'regular',
-                  weekday_font: 'great_vibes',
-                  weekday_font_size: 70,
-                  weekday_font_weight: 'thin',
-                  date_font: 'kaushan_script',
-                  date_font_size: 40,
-                  date_font_weight: 'medium',
+                weekday_font: 'great_vibes',
+                weekday_font_size: 70,
+                weekday_font_weight: 'thin',
+                date_font: 'kaushan_script',
+                date_font_size: 40,
+                date_font_weight: 'medium',
             },
-            photos: { refresh_interval: 30, photo_quality: '80', enable_festive_queries: true }
+            photos: { refresh_interval: 30, photo_quality: '80', enable_festive_queries: true, custom_query: '' }
         };
         updateTimeFormatCache();
     }
@@ -690,6 +690,7 @@ window.getSettings = () => invoke('get_settings').then(s => {
         refresh_interval:      s.photos.refresh_interval,
         photo_quality:         s.photos.photo_quality,
         enable_festive_queries: s.photos.enable_festive_queries,
+        custom_query:          s.photos.custom_query,
     });
     console.groupEnd();
 

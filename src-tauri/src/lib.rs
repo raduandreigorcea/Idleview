@@ -691,6 +691,14 @@ fn build_photo_query(
     sunset_iso: Option<String>,
     enable_festive: Option<bool>,
 ) -> PhotoQuery {
+    let settings = get_settings().unwrap_or_default();
+    let custom_query = settings.photos.custom_query.trim();
+    if !custom_query.is_empty() {
+        return PhotoQuery {
+            query: custom_query.to_string(),
+        };
+    }
+
     build_photo_query_impl(cloudcover, rain, showers, snowfall, weathercode, sunrise_iso, sunset_iso, enable_festive)
 }
 

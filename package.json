@@ -5,7 +5,10 @@
   "type": "module",
   "scripts": {
     "tauri": "tauri",
-    "test": "vitest run",
+    "test": "node scripts/test-all.mjs",
+    "test:app": "vitest run",
+    "test:proxy": "npm --prefix proxy test",
+    "test:control": "npm --prefix idleview-control test",
     "test:watch": "vitest",
     "test:rust": "cd src-tauri && cargo test"
   },

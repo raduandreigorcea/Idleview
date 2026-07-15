@@ -1,3 +1,5 @@
+import { photoSettingsSignature, getPrecipState, refreshIntervalMs } from './photo-settings.js';
+
 const invoke = window.__TAURI__.core.invoke;
 
 // Store state
@@ -15,95 +17,51 @@ let sunriseSunsetTimeFormat = null;
 let sunriseSunsetIs12h = false;
 let weatherTimeout = null;
 let lastPrecipState = null;
+let pairingTimeout = null;
 
-const SANS_FONT_MAP = {
-    roboto: "'Roboto', sans-serif",
-    open_sans: "'Open Sans', sans-serif",
-    google_sans: "'Google Sans', 'Product Sans', sans-serif",
-    inter: "'Inter', sans-serif",
-    montserrat: "'Montserrat', sans-serif",
-    poppins: "'Poppins', sans-serif",
-    lato: "'Lato', sans-serif",
-    noto_sans_japanese: "'Noto Sans JP', sans-serif",
-    arimo: "'Arimo', sans-serif",
-    roboto_condensed: "'Roboto Condensed', sans-serif",
-    unbounded: "'Unbounded', sans-serif",
-    space_grotesk: "'Space Grotesk', sans-serif",
-};
+// The font catalogue comes from Rust (see src-tauri/src/fonts.rs). This file used to
+// keep its own copies of the font list, the CSS stacks, the weight names and the size
+// clamps, and every one of them had drifted from the control panel's copies: fonts were
+// offered that were never loaded, weights that the families do not publish, and the
+// weekday/date size range here (16-120) disagreed with the panel's and the backend's
+// (40-200), so a size the panel accepted was silently capped on screen.
+//
+// There is one catalogue now, and the backend has already validated and snapped every
+// stored value against it - so this just applies what it is given.
+let fontCatalogue = null;
 
-const FONT_WEIGHT_MAP = {
-    thin: 200,
-    light: 300,
-    regular: 400,
-    medium: 500,
-    semibold: 600,
-    bold: 700,
-};
-
-const CURSIVE_FONT_MAP = {
-    sacramento:     "'Sacramento', cursive",
-    great_vibes:    "'Great Vibes', cursive",
-    dancing_script: "'Dancing Script', cursive",
-    pacifico:       "'Pacifico', cursive",
-    satisfy:        "'Satisfy', cursive",
-    pinyon_script:  "'Pinyon Script', cursive",
-    alex_brush:     "'Alex Brush', cursive",
-    kaushan_script: "'Kaushan Script', cursive",
-    italianno:      "'Italianno', cursive",
-};
-
-function applyWeekdayTypographySettings() {
-    const root = document.documentElement;
-    if (!root) return;
-    const display = userSettings?.display || {};
-
-    // Weekday font family
-    const weekdayKey = (display.weekday_font || 'great_vibes').toLowerCase();
-    root.style.setProperty('--font-weekday', CURSIVE_FONT_MAP[weekdayKey] || CURSIVE_FONT_MAP.sacramento);
-
-    // Weekday font size
-    const wSize = Math.max(16, Math.min(120, Number(display.weekday_font_size) || 70));
-    root.style.setProperty('--font-size-weekday', `${wSize}px`);
-
-    // Weekday font weight
-    const wWeight = FONT_WEIGHT_MAP[(display.weekday_font_weight || 'thin').toLowerCase()] ?? 200;
-    root.style.setProperty('--font-weight-weekday', wWeight);
-
-    // Date font family (checks both sans-serif and cursive/script pools)
-    const dateKey = (display.date_font || 'kaushan_script').toLowerCase();
-    root.style.setProperty('--font-date', SANS_FONT_MAP[dateKey] || CURSIVE_FONT_MAP[dateKey] || SANS_FONT_MAP.space_grotesk);
-
-    // Date font size
-    const dSize = Math.max(16, Math.min(120, Number(display.date_font_size) || 40));
-    root.style.setProperty('--font-size-date', `${dSize}px`);
-
-    // Date font weight
-    const dWeight = FONT_WEIGHT_MAP[(display.date_font_weight || 'medium').toLowerCase()] ?? 500;
-    root.style.setProperty('--font-weight-date', dWeight);
+function fontStack(id) {
+    return fontCatalogue?.fonts.find(font => font.id === id)?.stack || 'sans-serif';
 }
 
-function applyClockTypographySettings() {
+// Optical correction: font-size sets the em-box, not the letters, so the same px value
+// renders visibly larger in a tall face than a short one. size_scale (from the catalogue,
+// measured from the real font files) evens the apparent cap-height out. See fonts.rs.
+function fontScale(id) {
+    return fontCatalogue?.fonts.find(font => font.id === id)?.size_scale || 1;
+}
+
+function scaledSize(id, px) {
+    return `${Number(px) * fontScale(id)}px`;
+}
+
+function applyTypographySettings() {
     const root = document.documentElement;
-    if (!root) return;
+    if (!root || !fontCatalogue) return;
 
     const display = userSettings?.display || {};
 
-    // Font family
-    const configuredFont = (display.clock_font || 'roboto').toLowerCase();
-    const resolvedFont = SANS_FONT_MAP[configuredFont] || SANS_FONT_MAP.roboto;
-    root.style.setProperty('--font-time', resolvedFont);
+    root.style.setProperty('--font-time', fontStack(display.clock_font));
+    root.style.setProperty('--clock-size-desktop', scaledSize(display.clock_font, display.clock_font_size));
+    root.style.setProperty('--font-weight-time', display.clock_font_weight);
 
-    // Font size
-    const configuredSize = Number(display.clock_font_size);
-    const desktopSize = Number.isFinite(configuredSize)
-        ? Math.max(120, Math.min(260, Math.round(configuredSize)))
-        : 180;
-    root.style.setProperty('--clock-size-desktop', `${desktopSize}px`);
+    root.style.setProperty('--font-weekday', fontStack(display.weekday_font));
+    root.style.setProperty('--font-size-weekday', scaledSize(display.weekday_font, display.weekday_font_size));
+    root.style.setProperty('--font-weight-weekday', display.weekday_font_weight);
 
-    // Font weight
-    const weightKey = (display.clock_font_weight || 'regular').toLowerCase();
-    const resolvedWeight = FONT_WEIGHT_MAP[weightKey] ?? 400;
-    root.style.setProperty('--font-weight-time', resolvedWeight);
+    root.style.setProperty('--font-date', fontStack(display.date_font));
+    root.style.setProperty('--font-size-date', scaledSize(display.date_font, display.date_font_size));
+    root.style.setProperty('--font-weight-date', display.date_font_weight);
 }
 
 // Simple element setters
@@ -111,6 +69,30 @@ const setText = (id, value) => {
     const el = document.getElementById(id);
     if (el && el.textContent !== value) el.textContent = value;
 };
+
+// Unsplash display names and profile URLs are user-controlled strings. Interpolating
+// them into innerHTML lets a crafted name inject markup, and a `javascript:` href
+// would run on click - so links are built as nodes and every URL is scheme-checked.
+function safeHttpUrl(value) {
+    try {
+        const url = new URL(value);
+        return url.protocol === 'http:' || url.protocol === 'https:' ? url.href : null;
+    } catch {
+        return null;
+    }
+}
+
+function externalLink(href, text) {
+    const safeHref = safeHttpUrl(href);
+    const el = document.createElement(safeHref ? 'a' : 'span');
+    if (safeHref) {
+        el.href = safeHref;
+        el.target = '_blank';
+        el.rel = 'noopener noreferrer';
+    }
+    el.textContent = text;
+    return el;
+}
 
 
 
@@ -185,15 +167,9 @@ async function fetchLocation() {
     }
 }
 
-function getPrecipState(weather) {
-    const c = weather.weathercode ?? -1;
-    if (weather.snowfall > 0 || (c >= 71 && c <= 77) || c === 85 || c === 86) return 'snow';
-    if (weather.rain > 0 || (c >= 51 && c <= 67) || (c >= 80 && c <= 82) || c >= 95) return 'rain';
-    return 'none';
-}
-
 // Update weather data (self-scheduling: 15 min normally, 5 min if precip state changed)
-async function updateWeather(location) {
+// forcePhoto bypasses the photo cache - used when a settings change invalidated it.
+async function updateWeather(location, { forcePhoto = false } = {}) {
     if (weatherTimeout) {
         clearTimeout(weatherTimeout);
         weatherTimeout = null;
@@ -209,7 +185,7 @@ async function updateWeather(location) {
         lastPrecipState = newPrecipState;
 
         updateWeatherDisplay(weather);
-        await fetchUnsplashPhoto();
+        await fetchUnsplashPhoto(forcePhoto);
 
         // Poll sooner if precipitation just started or stopped, otherwise every 15 min
         const delay = precipChanged ? 5 * 60 * 1000 : 15 * 60 * 1000;
@@ -257,47 +233,34 @@ function updateTimeFormatCache() {
         : { hour: '2-digit', minute: '2-digit', hour12: false };
 }
 
-// Load and apply user settings
+// Load and apply user settings. The backend returns its own defaults when no
+// settings file exists, so there is deliberately no fallback copy of the defaults
+// here - a second copy would drift from the Rust one.
 async function loadSettings() {
     try {
         userSettings = await invoke('get_settings');
-        updateTimeFormatCache();
-        applyDisplaySettings();
     } catch (error) {
         console.error('Failed to load settings:', error);
-        userSettings = {
-            units: { temperature_unit: 'celsius', time_format: '24h', date_format: 'mdy', wind_speed_unit: 'kmh' },
-            display: {
-                show_clock: true,
-                show_date: true,
-                show_weekday: true,
-                show_temperature: true,
-                show_humidity_wind: true,
-                show_precipitation_cloudiness: true,
-                show_sunrise_sunset: true,
-                show_location: true,
-                show_debug: false,
-                clock_font: 'roboto',
-                clock_font_size: 180,
-                clock_font_weight: 'regular',
-                weekday_font: 'great_vibes',
-                weekday_font_size: 70,
-                weekday_font_weight: 'thin',
-                date_font: 'kaushan_script',
-                date_font_size: 40,
-                date_font_weight: 'medium',
-            },
-            photos: { refresh_interval: 30, photo_quality: '80', enable_festive_queries: true, custom_query: '' }
-        };
-        updateTimeFormatCache();
     }
+    updateTimeFormatCache();
+    applyDisplaySettings();
 }
 
 // Reload settings and refresh UI
 async function reloadSettings() {
+    const photoSettingsBefore = photoSettingsSignature(userSettings);
     await loadSettings();
+    const photoSettingsChanged = photoSettingsBefore !== photoSettingsSignature(userSettings);
+
+    // The cached and prefetched photos were built from the old query, so honouring
+    // the cache here would leave a new custom_query with no visible effect until it
+    // expired (up to refresh_interval minutes later).
+    if (photoSettingsChanged) prefetchedPhoto = null;
+
     if (window.userLocation) {
-        await updateWeather(window.userLocation);
+        await updateWeather(window.userLocation, { forcePhoto: photoSettingsChanged });
+    } else if (photoSettingsChanged) {
+        await fetchUnsplashPhoto(true);
     }
     await updateTimeAndDate();
 }
@@ -325,8 +288,7 @@ function startTimeTicker() {
 function applyDisplaySettings() {
     if (!userSettings) return;
 
-    applyClockTypographySettings();
-    applyWeekdayTypographySettings();
+    applyTypographySettings();
     
     const showClock = userSettings.display.show_clock !== false;
     const showDate = userSettings.display.show_date !== false;
@@ -396,11 +358,6 @@ function cachePhoto(photo, query) {
     }));
 }
 
-// Helper: Get refresh interval in milliseconds
-function getRefreshIntervalMs() {
-    return (userSettings?.photos?.refresh_interval || 30) * 60 * 1000;
-}
-
 // Helper: Build photo query parameters
 function buildPhotoQueryParams() {
     if (!currentWeather) return null;
@@ -449,9 +406,14 @@ async function displayPhoto(photo) {
         creditElement.id = 'photo-credit';
         document.body.appendChild(creditElement);
     }
-    creditElement.innerHTML = `Photo by <a href="${photo.author_url}" target="_blank">${photo.author}</a> on <a href="https://unsplash.com" target="_blank">Unsplash</a>`;
+    creditElement.replaceChildren(
+        'Photo by ',
+        externalLink(photo.author_url, photo.author || 'Unknown'),
+        ' on ',
+        externalLink('https://unsplash.com', 'Unsplash')
+    );
     creditElement.classList.remove('hidden');
-    
+
     if (creditTimeout) clearTimeout(creditTimeout);
     creditTimeout = setTimeout(() => creditElement.classList.add('hidden'), 10000);
 
@@ -462,11 +424,11 @@ async function displayPhoto(photo) {
         invoke('trigger_unsplash_download', { downloadUrl: photo.download_location }).catch(() => {});
     }
 
-    // Update HTTP API (fire-and-forget)
-    fetch('http://localhost:8737/api/photo/current', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: photo.url, author: photo.author, author_url: photo.author_url })
+    // Publish to the control panel (fire-and-forget). This goes through a Tauri
+    // command rather than an HTTP call to our own server: the state is in-process,
+    // and a cross-origin fetch would need the API to grant CORS to a browser origin.
+    invoke('set_current_photo', {
+        photo: { url: photo.url, author: photo.author, author_url: photo.author_url }
     }).catch(() => {});
 
     // Debug display
@@ -490,27 +452,40 @@ async function displayPhoto(photo) {
 
                     let nextRefreshDisplay = 'N/A';
                     if (cached?.timestamp) {
-                        const refreshInterval = getRefreshIntervalMs();
+                        const refreshInterval = refreshIntervalMs(userSettings);
                         const cacheAge = Date.now() - cached.timestamp;
                         const timeUntilRefresh = Math.max(0, refreshInterval - cacheAge);
                         nextRefreshDisplay = Math.floor(timeUntilRefresh / 1000) + 's';
                     }
 
-                    debugEl.innerHTML = `
-                        <div>Photo cached: ${debugInfo.photo_age}</div>
-                        <div>Query: ${debugInfo.query}</div>
-                        <div>Time: ${debugInfo.time_of_day} (${debugInfo.time_source})</div>
-                        <div>Season: ${debugInfo.season}</div>
-                        <div>API Key: ${debugInfo.api_key_status} (${debugInfo.api_key_source})</div>
-                        <div>Cache valid: ${lastCacheValid === null ? 'N/A' : lastCacheValid ? 'Yes' : 'No'}</div>
-                        <div>Next refresh: ${nextRefreshDisplay}</div>
-                        <div style="margin-top:8px; border-top:1px dashed currentColor; padding-top:8px;">
-                            <div>Temp: ${debugInfo.temperature}</div>
-                            <div>Rain: ${debugInfo.rain}</div>
-                            <div>Snow: ${debugInfo.snowfall}</div>
-                            <div>Clouds: ${debugInfo.cloudcover}</div>
-                        </div>
-                    `;
+                    // The query is whatever the user typed into the control panel, so
+                    // this is built as text nodes rather than interpolated markup.
+                    const row = (text) => {
+                        const div = document.createElement('div');
+                        div.textContent = text;
+                        return div;
+                    };
+
+                    const weather = document.createElement('div');
+                    weather.className = 'debug-weather';
+                    weather.append(
+                        row(`Temp: ${debugInfo.temperature}`),
+                        row(`Rain: ${debugInfo.rain}`),
+                        row(`Snow: ${debugInfo.snowfall}`),
+                        row(`Clouds: ${debugInfo.cloudcover}`)
+                    );
+
+                    debugEl.replaceChildren(
+                        row(`Photo cached: ${debugInfo.photo_age}`),
+                        row(`Query: ${debugInfo.query}`),
+                        row(`Time: ${debugInfo.time_of_day} (${debugInfo.time_source})`),
+                        row(`Season: ${debugInfo.season}`),
+                        row(`Photos: ${debugInfo.photo_mode}`),
+                        row(`Source: ${debugInfo.photo_source}`),
+                        row(`Cache valid: ${lastCacheValid === null ? 'N/A' : lastCacheValid ? 'Yes' : 'No'}`),
+                        row(`Next refresh: ${nextRefreshDisplay}`),
+                        weather
+                    );
                 } catch (e) {
                     console.error('Failed to render debug:', e);
                 }
@@ -589,7 +564,7 @@ async function checkPhotoContext() {
     
     try {
         const cacheAge = Date.now() - cached.timestamp;
-        const refreshInterval = getRefreshIntervalMs();
+        const refreshInterval = refreshIntervalMs(userSettings);
         const prefetchTime = refreshInterval - (60 * 1000);
         
         if (cacheAge >= prefetchTime && cacheAge < refreshInterval && !prefetchedPhoto) {
@@ -605,33 +580,95 @@ async function checkPhotoContext() {
     }
 }
 
+// The control panel needs a token to change anything, and this screen is the only
+// place it is ever shown. Displayed briefly at startup so a phone can be paired, and
+// recallable with T - a kiosk has no other affordance for reading it.
+async function showPairingCard(durationMs = 30000) {
+    let info;
+    try {
+        info = await invoke('get_server_info');
+    } catch (error) {
+        console.error('Failed to read server info:', error);
+        return;
+    }
+
+    let el = document.getElementById('pairing-card');
+    if (!el) {
+        el = document.createElement('div');
+        el.id = 'pairing-card';
+        document.body.appendChild(el);
+    }
+
+    const line = (className, text) => {
+        const div = document.createElement('div');
+        div.className = className;
+        div.textContent = text;
+        return div;
+    };
+
+    // Prefer the LAN address: 127.0.0.1 is useless to the phone you are pairing.
+    const lanUrl = info.urls.find(url => !url.includes('127.0.0.1')) || info.urls[0];
+
+    el.replaceChildren(
+        line('pairing-title', 'Control panel'),
+        line('pairing-url', lanUrl),
+        line('pairing-label', 'Token'),
+        line('pairing-token', info.token),
+        line('pairing-hint', 'Press T to show or hide')
+    );
+    el.classList.remove('hidden');
+
+    if (pairingTimeout) clearTimeout(pairingTimeout);
+    if (durationMs > 0) {
+        pairingTimeout = setTimeout(() => el.classList.add('hidden'), durationMs);
+    }
+}
+
+function togglePairingCard() {
+    const el = document.getElementById('pairing-card');
+    if (!el || el.classList.contains('hidden')) {
+        showPairingCard(0);
+        return;
+    }
+    if (pairingTimeout) clearTimeout(pairingTimeout);
+    el.classList.add('hidden');
+}
+
 // Initialize
 (async function init() {
+    // Before settings: applying typography needs the catalogue to resolve a font id to
+    // a CSS stack, and the stylesheet URL comes from it too.
+    await loadFontCatalogue();
     await loadSettings();
-    
+
     // Show cached photo immediately
     const cached = getCachedPhoto();
     if (cached) {
         await displayPhoto(cached.photo);
     }
-    
+
     // Start UI updates
     startTimeTicker();
 
     // Fetch location and weather (with retry logic built-in)
     window.userLocation = null;
     await fetchLocation();
-    
+
     // Photo refresh check
     checkPhotoContext();
     setInterval(checkPhotoContext, 5 * 60 * 1000);
-    
+
     // Listen for settings updates from HTTP API
     await window.__TAURI__.event.listen('settings-updated', async () => {
         await reloadSettings();
     });
 
     document.addEventListener('contextmenu', e => e.preventDefault());
+    document.addEventListener('keydown', event => {
+        if (event.key === 't' || event.key === 'T') togglePairingCard();
+    });
+
+    showPairingCard();
     setTimeout(applyDisplaySettings, 100);
 })();
 
@@ -695,11 +732,16 @@ window.getSettings = () => invoke('get_settings').then(s => {
     console.groupEnd();
 
     console.groupEnd();
-    return s;
+
+    // The console echoes whatever we return, so hand back a copy without the API key
+    // and control token rather than printing them into the log.
+    const { secrets, ...withoutSecrets } = s;
+    return withoutSecrets;
 });
 window.saveSettings = s => invoke('save_settings', { settings: s }).then(() => console.log('✅ Saved!'));
-window.resetSettings = () => invoke('reset_settings').then(s => { console.log('✅ Reset!', s); return s; });
+window.resetSettings = () => invoke('reset_settings').then(() => console.log('✅ Reset!'));
 window.reloadSettings = reloadSettings;
+window.showToken = () => showPairingCard(0);
 
 // Listen for photo refresh events
 window.__TAURI__.event.listen('refresh-photo', () => window.refreshPhoto());
@@ -707,7 +749,9 @@ window.__TAURI__.event.listen('refresh-photo', () => window.refreshPhoto());
 console.log('%c🎨 Idleview', 'font-size: 14px; font-weight: bold; color: #4f46e5');
 console.log('%cCommands: refreshPhoto() | getSettings() | saveSettings(obj) | resetSettings() | reloadSettings()', 'color: #64748b');
 
-function loadGoogleFonts() {
+// The stylesheet URL is generated from the catalogue, so it requests exactly the fonts
+// and weights that are on offer - no more, and never less.
+function loadGoogleFonts(stylesheetUrl) {
     ['https://fonts.googleapis.com', 'https://fonts.gstatic.com'].forEach(origin => {
         const link = document.createElement('link');
         link.rel = 'preconnect';
@@ -715,16 +759,18 @@ function loadGoogleFonts() {
         if (origin.includes('gstatic')) link.crossOrigin = '';
         document.head.appendChild(link);
     });
+
     const link = document.createElement('link');
     link.rel = 'stylesheet';
-    // Cormorant Garamond loads separately with display=block so it never shows a fallback swap
-    const cgLink = document.createElement('link');
-    cgLink.rel = 'stylesheet';
-    cgLink.href = 'https://fonts.googleapis.com/css2?family=Sacramento&family=Great+Vibes&family=Dancing+Script:wght@400;700&family=Pacifico&family=Satisfy&family=Pinyon+Script&family=Alex+Brush&family=Kaushan+Script&family=Italianno&display=block';
-    document.head.appendChild(cgLink);
-
-    link.href = 'https://fonts.googleapis.com/css2?family=Roboto:wght@100;300;400;500;700&family=Open+Sans:wght@300;400;500;600;700&family=Inter:wght@100;300;400;500;700&family=Montserrat:wght@100;200;300;400;500;700&family=Poppins:wght@100;200;300;400;500;700&family=Lato:wght@100;300;400;700&family=Noto+Sans+JP:wght@100;300;400;500;700&family=Arimo:wght@400;500;600;700&family=Roboto+Condensed:wght@100;300;400;500;700&family=Unbounded:wght@200;300;400;500;700&display=swap';
+    link.href = stylesheetUrl;
     document.head.appendChild(link);
 }
 
-loadGoogleFonts();
+async function loadFontCatalogue() {
+    try {
+        fontCatalogue = await invoke('get_font_catalogue');
+        loadGoogleFonts(fontCatalogue.stylesheet);
+    } catch (error) {
+        console.error('Failed to load the font catalogue:', error);
+    }
+}

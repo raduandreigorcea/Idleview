@@ -1,0 +1,81 @@
+name: Release
+
+# Builds the Tauri desktop app for Windows and Linux and publishes the installers to a
+# GitHub Release. Trigger it by pushing a tag like `v0.1.0`, or run it by hand from the
+# Actions tab (workflow_dispatch). The release tag/name are taken from the version in
+# src-tauri/tauri.conf.json via tauri-action's __VERSION__ substitution.
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+# tauri-action needs to create the release and upload assets to it.
+permissions:
+  contents: write
+
+jobs:
+  release:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Windows -> .exe (NSIS) and .msi, per bundle.targets in tauri.conf.json.
+          - platform: windows-latest
+          # Linux -> .deb and .rpm. 22.04 keeps the glibc requirement low so the
+          # binaries run on a wide range of distros.
+          - platform: ubuntu-22.04
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      # The control panel is a git submodule that gets built into the app, so it must be
+      # checked out too.
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # Tauri v2's Linux toolchain. `rpm` is needed for the .rpm bundle target.
+      - name: Install Linux system dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            rpm \
+            libxdo-dev \
+            build-essential \
+            file
+
+      # Node is needed for beforeBuildCommand, which installs and builds the control panel.
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      # Caches the Rust build so reruns don't recompile every crate from scratch.
+      - name: Cache Rust
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Build and publish
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          # __VERSION__ is replaced with the version from tauri.conf.json, so both runners
+          # target the same release and the tag stays in step with the app version.
+          tagName: v__VERSION__
+          releaseName: 'Idleview v__VERSION__'
+          releaseBody: 'Automated build. Installers are attached below.'
+          releaseDraft: false
+          prerelease: false

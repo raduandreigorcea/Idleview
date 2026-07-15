@@ -1,0 +1,3 @@
+[submodule "idleview-control"]
+	path = idleview-control
+	url = https://github.com/raduandreigorcea/Idleview-Control.git

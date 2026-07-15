@@ -1,0 +1,8 @@
+name = "idleview-photos"
+main = "src/worker.js"
+compatibility_date = "2026-07-15"
+workers_dev = true
+
+# The Unsplash key is NOT here. It is a secret, set once with:
+#   wrangler secret put UNSPLASH_ACCESS_KEY
+# Secrets are encrypted by Cloudflare and never stored in this file or the repo.

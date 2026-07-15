@@ -55,7 +55,7 @@ A beautiful, fullscreen dashboard application built with Tauri that displays the
 - **[IP-API](http://ip-api.com/)**: IP-based geolocation
 
 
-### **Access from Network**
+## 📡 Access from Network
 
 Once running, you can access the control panel from any device on your local network:
 
@@ -64,5 +64,14 @@ http://192.168.XXX.XXX:8737
 ```
 
 Replace `XXX` with your device IP address.
+
+### Pairing
+
+Reading settings is open, but **changing** them requires a control token — otherwise
+anyone on the same network could repaint your screen.
+
+The token is generated on first run and shown on the Idleview screen for 30 seconds at
+startup. Press **T** on the screen at any time to show it again. Enter it once in the
+control panel and it is remembered.
 
 ---

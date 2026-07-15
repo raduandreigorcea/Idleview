@@ -1,138 +1,110 @@
 use serde::{Deserialize, Serialize};
-use chrono::{Datelike, Local};
-use std::sync::{Mutex, OnceLock};
+use chrono::{Datelike, Local, Timelike};
+use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tauri::Manager;
 
 // HTTP server modules
 pub mod settings_manager;
 pub mod http_server;
+pub mod fonts;
+pub mod photos;
 
-// Re-export settings types from settings_manager
+/// Port the control-panel HTTP server listens on.
+pub const HTTP_PORT: u16 = 8737;
+
 use settings_manager::Settings;
 
 // ===== Core functions (public for testing) =====
 
 static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-static UNSPLASH_ACCESS_KEY: OnceLock<String> = OnceLock::new();
-static SUN_TIMES_CACHE: OnceLock<Mutex<SunTimesCache>> = OnceLock::new();
-
-#[derive(Clone)]
-struct SunTimesCache {
-    sunrise_raw: String,
-    sunset_raw: String,
-    sunrise: chrono::NaiveDateTime,
-    sunset: chrono::NaiveDateTime,
-}
 
 fn http_client() -> &'static reqwest::Client {
     HTTP_CLIENT.get_or_init(reqwest::Client::new)
 }
 
-fn unsplash_access_key() -> &'static str {
-    UNSPLASH_ACCESS_KEY
-        .get_or_init(|| {
-            std::env::var("UNSPLASH_ACCESS_KEY").unwrap_or_else(|_| {
-                option_env!("UNSPLASH_ACCESS_KEY")
-                    .unwrap_or("YOUR_UNSPLASH_ACCESS_KEY")
-                    .to_string()
-            })
-        })
-        .as_str()
-}
-
-fn get_cached_sun_times(
-    sunrise_str: &str,
-    sunset_str: &str,
-) -> Option<(chrono::NaiveDateTime, chrono::NaiveDateTime)> {
-    if let Some(cache) = SUN_TIMES_CACHE.get() {
-        if let Ok(cache) = cache.lock() {
-            if cache.sunrise_raw == sunrise_str && cache.sunset_raw == sunset_str {
-                return Some((cache.sunrise, cache.sunset));
-            }
-        }
-    }
-
-    let parsed = (
-        chrono::NaiveDateTime::parse_from_str(sunrise_str, "%Y-%m-%dT%H:%M"),
-        chrono::NaiveDateTime::parse_from_str(sunset_str, "%Y-%m-%dT%H:%M"),
-    );
-
-    if let (Ok(sunrise), Ok(sunset)) = parsed {
-        let cache = SUN_TIMES_CACHE.get_or_init(|| {
-            Mutex::new(SunTimesCache {
-                sunrise_raw: sunrise_str.to_string(),
-                sunset_raw: sunset_str.to_string(),
-                sunrise,
-                sunset,
-            })
-        });
-
-        if let Ok(mut cache) = cache.lock() {
-            *cache = SunTimesCache {
-                sunrise_raw: sunrise_str.to_string(),
-                sunset_raw: sunset_str.to_string(),
-                sunrise,
-                sunset,
-            };
-        }
-
-        return Some((sunrise, sunset));
-    }
-
-    None
+fn now_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 pub fn get_season_impl() -> Season {
-    let now = Local::now();
-    let month = now.month();
-    
-    let season = match month {
+    let season = match Local::now().month() {
         3..=5 => "spring",
         6..=8 => "summer",
         9..=11 => "autumn",
         _ => "winter",
     };
-    
-    Season {
-        season: season.to_string(),
-    }
+
+    Season { season: season.to_string() }
 }
 
 pub fn get_time_of_day_impl(sunrise_iso: Option<String>, sunset_iso: Option<String>) -> TimeOfDay {
-    // If we have sunrise/sunset data, use it
     if let (Some(sunrise_str), Some(sunset_str)) = (sunrise_iso, sunset_iso) {
-        // Parse as naive datetime (no timezone) since Open-Meteo returns local time
-        if let Some((sunrise, sunset)) = get_cached_sun_times(&sunrise_str, &sunset_str) {
+        // Open-Meteo returns local time, so these parse as naive datetimes.
+        let sunrise = chrono::NaiveDateTime::parse_from_str(&sunrise_str, "%Y-%m-%dT%H:%M");
+        let sunset = chrono::NaiveDateTime::parse_from_str(&sunset_str, "%Y-%m-%dT%H:%M");
+
+        if let (Ok(sunrise), Ok(sunset)) = (sunrise, sunset) {
             let now = Local::now().naive_local();
-            
-            // Define dawn as 30 minutes before sunrise, dusk as 30 minutes after sunset
+
+            // Dawn is 30 minutes either side of sunrise, dusk 30 either side of sunset.
             let dawn_start = sunrise - chrono::Duration::minutes(30);
             let dawn_end = sunrise + chrono::Duration::minutes(30);
             let dusk_start = sunset - chrono::Duration::minutes(30);
             let dusk_end = sunset + chrono::Duration::minutes(30);
-            
+
             let time_of_day = if now < dawn_start || now > dusk_end {
                 "night"
-            } else if now >= dawn_start && now <= dawn_end {
+            } else if now <= dawn_end {
                 "dawn"
-            } else if now >= dusk_start && now <= dusk_end {
+            } else if now >= dusk_start {
                 "dusk"
             } else {
                 "day"
             };
-            
+
             return TimeOfDay {
                 time_of_day: time_of_day.to_string(),
                 source: "api".to_string(),
             };
         }
     }
-    
-    // Fallback to simple hour-based detection
+
+    // No usable sunrise/sunset (weather API down, or unparseable timestamps):
+    // fall back to the local clock rather than assuming night, which would pick
+    // night photos in broad daylight.
     TimeOfDay {
-        time_of_day: "night".to_string(),
+        time_of_day: time_of_day_from_hour(Local::now().hour()).to_string(),
         source: "fallback".to_string(),
     }
+}
+
+/// Rough time-of-day bands used when sunrise/sunset data is unavailable.
+pub fn time_of_day_from_hour(hour: u32) -> &'static str {
+    match hour {
+        5..=7 => "dawn",
+        8..=17 => "day",
+        18..=20 => "dusk",
+        _ => "night",
+    }
+}
+
+/// The festive window the photo query and the debug panel both read. Keeping one
+/// definition is what stops the two from disagreeing about when Christmas is.
+pub fn holiday_for(month: u32, day: u32) -> Option<String> {
+    if month == 12 && (20..=26).contains(&day) {
+        return Some("christmas".to_string());
+    }
+    if (month == 12 && day >= 27) || (month == 1 && day <= 5) {
+        return Some("new year".to_string());
+    }
+    if month == 10 && day >= 25 {
+        return Some("halloween".to_string());
+    }
+    None
 }
 
 pub fn build_photo_query_impl(
@@ -145,57 +117,36 @@ pub fn build_photo_query_impl(
     sunset_iso: Option<String>,
     enable_festive: Option<bool>,
 ) -> PhotoQuery {
-    
-    // Get time of day and season
     let tod = get_time_of_day_impl(sunrise_iso, sunset_iso);
     let season = get_season_impl();
-    
-    // Check for festive/holiday periods
-    let enable_festive = enable_festive.unwrap_or(true);
-    if enable_festive {
+
+    if enable_festive.unwrap_or(true) {
         let now = Local::now();
-        let month = now.month();
-        let day = now.day();
-        
-        // Christmas period (Dec 20-26)
-        if month == 12 && day >= 20 && day <= 26 {
-            return PhotoQuery { query: "christmas".to_string() };
-        }
-        // New Year period (Dec 27 - Jan 5)
-        if (month == 12 && day >= 27) || (month == 1 && day <= 5) {
-            return PhotoQuery { query: "new year".to_string() };
-        }
-        // Halloween period (Oct 25-31)
-        if month == 10 && day >= 25 {
-            return PhotoQuery { query: "halloween".to_string() };
+        if let Some(holiday) = holiday_for(now.month(), now.day()) {
+            return PhotoQuery { query: holiday };
         }
     }
-    
-    // Determine precipitation type (use weathercode as fallback for freshly-started precip)
+
+    // Use the weathercode as a fallback for precipitation that has only just started
+    // and has not yet accumulated a measurable depth.
     let has_snow = snowfall > 0.5 || matches!(weathercode, 71..=77 | 85 | 86);
     let has_rain = (rain + showers) > 0.5 || matches!(weathercode, 51..=67 | 80..=82 | 95..=99);
-    
-    // Priority: time of day > season > precipitation
-    // Night/dawn/dusk are "special" times that override season focus
-    // During regular day, season takes priority
-    
+
+    // Night, dawn and dusk are distinctive enough to lead the query; during an
+    // ordinary day the season leads and weather only qualifies it.
     let query = match tod.time_of_day.as_str() {
         "night" => {
-            // Night is always prominent
-            // Add precipitation as compound phrase: "{season} snowy night", "{season} rainy night"
             if has_snow {
                 format!("{} snowy night", season.season)
             } else if has_rain {
                 format!("{} rainy night", season.season)
             } else {
-                // Just night + season
                 format!("{} night", season.season)
             }
-        },
+        }
         "dawn" => format!("{} dawn", season.season),
         "dusk" => format!("{} dusk", season.season),
         _ => {
-            // Daytime: season is primary, add precipitation if present
             if has_snow {
                 format!("{} snow", season.season)
             } else if has_rain {
@@ -203,47 +154,35 @@ pub fn build_photo_query_impl(
             } else if cloudcover > 70.0 && season.season != "winter" {
                 format!("{} cloudy", season.season)
             } else {
-                // Clear day - just season
                 season.season.to_string()
             }
         }
     };
-    
+
     PhotoQuery { query }
 }
 
 pub fn get_current_time_impl() -> FormattedTime {
     let now = Local::now();
-    
-    // Get settings to determine format
     let settings = settings_manager::read_settings().unwrap_or_default();
-    
-    // Format time based on settings
+
     let time = if settings.units.time_format == "12h" {
         now.format("%-I:%M %p").to_string()
     } else {
         now.format("%H:%M").to_string()
     };
-    
-    // Format date based on settings
+
     let date = match settings.units.date_format.as_str() {
-        "mdy" => now.format("%b %d, %Y").to_string(),  // Nov 28, 2025
-        "dmy" => now.format("%d %b %Y").to_string(),   // 28 Nov 2025
-        "ymd" => now.format("%Y %b %d").to_string(),   // 2025 Nov 28
-        _ => now.format("%b %d, %Y").to_string(),      // Default to MDY
+        "mdy" => now.format("%b %d, %Y").to_string(),
+        "ymd" => now.format("%Y %b %d").to_string(),
+        _ => now.format("%d %b %Y").to_string(), // dmy is the default
     };
-    
-    let day_of_week = now.format("%A").to_string();
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_millis() as u64;
-    
+
     FormattedTime {
         time,
         date,
-        day_of_week,
-        timestamp,
+        day_of_week: now.format("%A").to_string(),
+        timestamp: now_millis(),
     }
 }
 
@@ -261,143 +200,42 @@ pub fn get_precipitation_display_impl(weather: WeatherData) -> PrecipitationDisp
         "< 0.1 cm".to_string()
     };
 
-    match weather.weathercode {
-        // Thunderstorm (with or without hail)
-        95..=99 => PrecipitationDisplay {
-            icon: "droplets.svg".to_string(),
-            label: "Thunder".to_string(),
-            value: rain_value,
-        },
-        // Heavy rain showers
-        82 => PrecipitationDisplay {
-            icon: "droplets.svg".to_string(),
-            label: "Heavy Shower".to_string(),
-            value: rain_value,
-        },
-        // Rain showers
-        80 | 81 => PrecipitationDisplay {
-            icon: "droplets.svg".to_string(),
-            label: "Shower".to_string(),
-            value: rain_value,
-        },
-        // Snow showers
-        85 | 86 => PrecipitationDisplay {
-            icon: "snowflake.svg".to_string(),
-            label: "Snow Shower".to_string(),
-            value: snow_value,
-        },
-        // Freezing rain / sleet
-        56 | 57 | 66 | 67 => PrecipitationDisplay {
-            icon: "droplet.svg".to_string(),
-            label: "Sleet".to_string(),
-            value: rain_value,
-        },
-        // Heavy rain
-        65 => PrecipitationDisplay {
-            icon: "droplets.svg".to_string(),
-            label: "Heavy Rain".to_string(),
-            value: rain_value,
-        },
-        // Moderate rain
-        63 => PrecipitationDisplay {
-            icon: "droplets.svg".to_string(),
-            label: "Rain".to_string(),
-            value: rain_value,
-        },
-        // Slight rain
-        61 => PrecipitationDisplay {
-            icon: "droplet.svg".to_string(),
-            label: "Light Rain".to_string(),
-            value: rain_value,
-        },
-        // Dense drizzle
-        55 => PrecipitationDisplay {
-            icon: "droplet.svg".to_string(),
-            label: "Drizzle".to_string(),
-            value: rain_value,
-        },
-        // Moderate / light drizzle
-        51 | 53 => PrecipitationDisplay {
-            icon: "droplet.svg".to_string(),
-            label: "Drizzle".to_string(),
-            value: rain_value,
-        },
-        // Heavy snow
-        75 => PrecipitationDisplay {
-            icon: "snowflake.svg".to_string(),
-            label: "Heavy Snow".to_string(),
-            value: snow_value,
-        },
-        // Snow / snow grains
-        71 | 73 | 77 => PrecipitationDisplay {
-            icon: "snowflake.svg".to_string(),
-            label: "Snow".to_string(),
-            value: snow_value,
-        },
-        // Fog / rime fog
-        45 | 48 => PrecipitationDisplay {
-            icon: "cloud-fog.svg".to_string(),
-            label: "Fog".to_string(),
-            value: "Active".to_string(),
-        },
-        // Fallback: use measured values if present, otherwise Clear
-        _ => {
-            if weather.snowfall > 0.0 {
-                PrecipitationDisplay {
-                    icon: "snowflake.svg".to_string(),
-                    label: "Snow".to_string(),
-                    value: format!("{:.1} cm", weather.snowfall),
-                }
-            } else if liquid_mm > 0.0 {
-                PrecipitationDisplay {
-                    icon: "droplets.svg".to_string(),
-                    label: "Rain".to_string(),
-                    value: format!("{:.1} mm", liquid_mm),
-                }
-            } else {
-                PrecipitationDisplay {
-                    icon: "umbrella.svg".to_string(),
-                    label: "Precip".to_string(),
-                    value: "Clear".to_string(),
-                }
-            }
-        }
+    let (icon, label, value) = match weather.weathercode {
+        95..=99 => ("droplets.svg", "Thunder", rain_value),
+        82 => ("droplets.svg", "Heavy Shower", rain_value),
+        80 | 81 => ("droplets.svg", "Shower", rain_value),
+        85 | 86 => ("snowflake.svg", "Snow Shower", snow_value),
+        56 | 57 | 66 | 67 => ("droplet.svg", "Sleet", rain_value),
+        65 => ("droplets.svg", "Heavy Rain", rain_value),
+        63 => ("droplets.svg", "Rain", rain_value),
+        61 => ("droplet.svg", "Light Rain", rain_value),
+        51 | 53 | 55 => ("droplet.svg", "Drizzle", rain_value),
+        75 => ("snowflake.svg", "Heavy Snow", snow_value),
+        71 | 73 | 77 => ("snowflake.svg", "Snow", snow_value),
+        45 | 48 => ("cloud-fog.svg", "Fog", "Active".to_string()),
+        // Unknown code: trust the measured values if there are any, else call it clear.
+        _ if weather.snowfall > 0.0 => ("snowflake.svg", "Snow", snow_value),
+        _ if liquid_mm > 0.0 => ("droplets.svg", "Rain", rain_value),
+        _ => ("umbrella.svg", "Precip", "Clear".to_string()),
+    };
+
+    PrecipitationDisplay {
+        icon: icon.to_string(),
+        label: label.to_string(),
+        value,
     }
 }
 
 pub fn is_cache_valid_impl(cache_timestamp: u64) -> bool {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_millis() as u64;
-    
     let settings = settings_manager::read_settings().unwrap_or_default();
-    let refresh_interval_ms = (settings.photos.refresh_interval as u64) * 60 * 1000;
-    
-    let cache_age = now.saturating_sub(cache_timestamp);
-    cache_age < refresh_interval_ms
+    // refresh_interval is clamped to at least 1 minute on every write, so this can
+    // never collapse to a zero-length window that makes every photo instantly stale.
+    let refresh_interval_ms = settings.photos.refresh_interval * 60 * 1000;
+
+    now_millis().saturating_sub(cache_timestamp) < refresh_interval_ms
 }
 
-pub fn format_time_remaining_impl(milliseconds: i64) -> String {
-    if milliseconds <= 0 {
-        return "0s".to_string();
-    }
-    
-    let total_seconds = milliseconds / 1000;
-    let hours = total_seconds / 3600;
-    let minutes = (total_seconds % 3600) / 60;
-    let seconds = total_seconds % 60;
-    
-    if hours > 0 {
-        format!("{}h {:02}m", hours, minutes)
-    } else if minutes > 0 {
-        format!("{}m {:02}s", minutes, seconds)
-    } else {
-        format!("{}s", seconds)
-    }
-}
-
-// ===== Tauri Commands (wrappers) =====
+// ===== Tauri Commands =====
 
 #[tauri::command]
 fn get_settings() -> Result<Settings, String> {
@@ -405,15 +243,34 @@ fn get_settings() -> Result<Settings, String> {
 }
 
 #[tauri::command]
-fn save_settings(settings: Settings) -> Result<(), String> {
+fn save_settings(settings: Settings) -> Result<Settings, String> {
     settings_manager::write_settings(&settings)
 }
 
 #[tauri::command]
 fn reset_settings() -> Result<Settings, String> {
-    let settings = Settings::default();
-    save_settings(settings.clone())?;
-    Ok(settings)
+    settings_manager::write_settings(&Settings::default())
+}
+
+/// The font catalogue, so the dashboard renders exactly the fonts (and weights) the
+/// control panel offered. Neither app keeps its own copy any more.
+#[tauri::command]
+fn get_font_catalogue() -> fonts::FontCatalogue {
+    fonts::catalogue()
+}
+
+/// What the dashboard needs to show a pairing card: where the control panel lives
+/// and the token required to change anything through it.
+#[tauri::command]
+fn get_server_info() -> Result<ServerInfo, String> {
+    Ok(ServerInfo {
+        port: HTTP_PORT,
+        token: settings_manager::ensure_auth_token()?,
+        urls: http_server::get_local_ips()
+            .into_iter()
+            .map(|ip| format!("http://{}:{}", ip, HTTP_PORT))
+            .collect(),
+    })
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -432,40 +289,19 @@ struct IpApiResponse {
     country: Option<String>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct ServerInfo {
+    pub port: u16,
+    pub token: String,
+    pub urls: Vec<String>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct UnsplashPhoto {
     pub url: String,
     pub author: String,
     pub author_url: String,
     pub download_location: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct UnsplashApiResponse {
-    urls: UnsplashUrls,
-    user: UnsplashUser,
-    links: UnsplashPhotoLinks,
-}
-
-#[derive(Debug, Deserialize)]
-struct UnsplashPhotoLinks {
-    download_location: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct UnsplashUrls {
-    regular: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct UnsplashUser {
-    name: String,
-    links: UnsplashUserLinks,
-}
-
-#[derive(Debug, Deserialize)]
-struct UnsplashUserLinks {
-    html: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -523,46 +359,34 @@ pub struct Season {
 }
 
 #[derive(Debug, Serialize)]
-pub struct Holiday {
-    pub holiday: Option<String>, // "christmas", "new year", "halloween", "easter"
-}
-
-#[derive(Debug, Serialize)]
 pub struct PhotoQuery {
     pub query: String,
 }
 
 #[derive(Debug, Serialize)]
 pub struct FormattedTime {
-    pub time: String,           // HH:MM
-    pub date: String,           // e.g., "Nov 28, 2025"
-    pub day_of_week: String,    // e.g., "FRIDAY"
-    pub timestamp: u64,         // Unix timestamp in milliseconds
-}
-
-#[derive(Debug, Serialize)]
-pub struct PhotoCache {
-    pub photo: UnsplashPhoto,
-    pub query: String,
+    pub time: String,
+    pub date: String,
+    pub day_of_week: String,
     pub timestamp: u64,
 }
 
 #[derive(Debug, Serialize)]
 pub struct PrecipitationDisplay {
-    pub icon: String,      // "snowflake.svg", "droplets.svg", "umbrella.svg"
-    pub label: String,     // "Snow", "Rain", "Precip"
-    pub value: String,     // "5.0 cm", "3.2 mm", "Clear"
+    pub icon: String,
+    pub label: String,
+    pub value: String,
 }
 
 #[derive(Debug, Serialize)]
 pub struct DebugInfo {
     pub photo_age: String,
     pub query: String,
-    pub time_source: String, // "api" or "fallback"
-    pub time_of_day: String, // "dawn", "day", "dusk", "night"
-    pub api_key_status: String,
-    pub api_key_source: String,
-    // Weather info
+    pub time_source: String,
+    pub time_of_day: String,
+    /// Where photos are fetched from. Never a key - the app does not have one.
+    pub photo_source: String,
+    pub photo_mode: String,
     pub temperature: String,
     pub rain: String,
     pub snowfall: String,
@@ -577,12 +401,12 @@ async fn get_location() -> Result<Location, String> {
         .send()
         .await
         .map_err(|e| format!("Failed to fetch location: {}", e))?;
-    
+
     let data: IpApiResponse = response
         .json()
         .await
         .map_err(|e| format!("Failed to parse location data: {}", e))?;
-    
+
     Ok(Location {
         latitude: data.lat,
         longitude: data.lon,
@@ -593,44 +417,42 @@ async fn get_location() -> Result<Location, String> {
 
 #[tauri::command]
 async fn get_weather(latitude: f64, longitude: f64) -> Result<WeatherData, String> {
-    let settings = get_settings().unwrap_or_default();
-    
+    let settings = settings_manager::read_settings().unwrap_or_default();
+
     let url = format!(
         "https://api.open-meteo.com/v1/forecast?latitude={}&longitude={}&current=temperature_2m,relative_humidity_2m,rain,showers,snowfall,cloudcover,wind_speed_10m,weathercode&daily=sunrise,sunset&timezone=auto",
         latitude, longitude
     );
-    
+
     let response = http_client()
         .get(&url)
         .send()
         .await
         .map_err(|e| format!("Failed to fetch weather: {}", e))?;
-    
+
     let data: OpenMeteoResponse = response
         .json()
         .await
         .map_err(|e| format!("Failed to parse weather data: {}", e))?;
-    
-    // Convert temperature based on user settings
+
     let temperature = match settings.units.temperature_unit.as_str() {
         "fahrenheit" => data.current.temperature_2m * 9.0 / 5.0 + 32.0,
-        _ => data.current.temperature_2m, // celsius is default
+        _ => data.current.temperature_2m,
     };
-    
-    // Convert wind speed based on user settings
+
     let wind_speed = match settings.units.wind_speed_unit.as_str() {
         "mph" => data.current.wind_speed_10m * 0.621371,
         "ms" => data.current.wind_speed_10m / 3.6,
-        _ => data.current.wind_speed_10m, // kmh is default
+        _ => data.current.wind_speed_10m,
     };
-    
-    // Get wind speed label
+
     let wind_speed_label = match settings.units.wind_speed_unit.as_str() {
         "mph" => "mph",
         "ms" => "m/s",
         _ => "km/h",
-    }.to_string();
-    
+    }
+    .to_string();
+
     Ok(WeatherData {
         temperature,
         temperature_unit: settings.units.temperature_unit.clone(),
@@ -643,41 +465,10 @@ async fn get_weather(latitude: f64, longitude: f64) -> Result<WeatherData, Strin
         showers: data.current.showers,
         snowfall: data.current.snowfall,
         weathercode: data.current.weathercode,
-        sunrise: data.daily.sunrise.get(0).cloned().unwrap_or_default(),
-        sunset: data.daily.sunset.get(0).cloned().unwrap_or_default(),
+        sunrise: data.daily.sunrise.first().cloned().unwrap_or_default(),
+        sunset: data.daily.sunset.first().cloned().unwrap_or_default(),
         timezone: data.timezone,
     })
-}
-
-#[tauri::command]
-fn get_season() -> Season {
-    get_season_impl()
-}
-
-#[tauri::command]
-fn get_holiday() -> Holiday {
-    let now = Local::now();
-    let month = now.month();
-    let day = now.day();
-    
-    let holiday = if month == 12 && day <= 26 {
-        Some("christmas".to_string())
-    } else if (month == 12 && day >= 27) || (month == 1 && day <= 5) {
-        Some("new year".to_string())
-    } else if month == 10 && day >= 25 {
-        Some("halloween".to_string())
-    } else if (month == 3 && day >= 20) || (month == 4 && day <= 20) {
-        Some("easter".to_string())
-    } else {
-        None
-    };
-    
-    Holiday { holiday }
-}
-
-#[tauri::command]
-fn get_time_of_day(sunrise_iso: Option<String>, sunset_iso: Option<String>) -> TimeOfDay {
-    get_time_of_day_impl(sunrise_iso, sunset_iso)
 }
 
 #[tauri::command]
@@ -691,157 +482,85 @@ fn build_photo_query(
     sunset_iso: Option<String>,
     enable_festive: Option<bool>,
 ) -> PhotoQuery {
-    let settings = get_settings().unwrap_or_default();
+    let settings = settings_manager::read_settings().unwrap_or_default();
     let custom_query = settings.photos.custom_query.trim();
     if !custom_query.is_empty() {
-        return PhotoQuery {
-            query: custom_query.to_string(),
-        };
+        return PhotoQuery { query: custom_query.to_string() };
     }
 
-    build_photo_query_impl(cloudcover, rain, showers, snowfall, weathercode, sunrise_iso, sunset_iso, enable_festive)
+    build_photo_query_impl(
+        cloudcover, rain, showers, snowfall, weathercode, sunrise_iso, sunset_iso, enable_festive,
+    )
+}
+
+/// Rewrite an Unsplash CDN URL to the size and quality we want. Parsing the URL
+/// rather than splicing strings means a change to Unsplash's parameter order or
+/// set cannot silently produce a malformed URL (or a duplicate `q=`).
+fn build_photo_url(base: &str, width: u32, height: u32, quality: u8) -> Result<String, String> {
+    let mut url = reqwest::Url::parse(base)
+        .map_err(|e| format!("Unsplash returned an unparseable photo URL: {}", e))?;
+
+    // Keep Unsplash's own tracking/identity params, drop the sizing ones we set.
+    let ours = ["w", "h", "fit", "q", "t"];
+    let kept: Vec<(String, String)> = url
+        .query_pairs()
+        .filter(|(key, _)| !ours.contains(&key.as_ref()))
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+        .collect();
+
+    let mut query = url.query_pairs_mut();
+    query.clear();
+    for (key, value) in &kept {
+        query.append_pair(key, value);
+    }
+    query
+        .append_pair("w", &width.to_string())
+        .append_pair("h", &height.to_string())
+        .append_pair("fit", "crop")
+        .append_pair("q", &quality.to_string())
+        // Cache-buster: without it the webview will happily reuse the previous image
+        // when two queries resolve to the same photo.
+        .append_pair("t", &now_millis().to_string());
+    drop(query);
+
+    Ok(url.to_string())
 }
 
 #[tauri::command]
 async fn get_unsplash_photo(width: u32, height: u32, query: String) -> Result<UnsplashPhoto, String> {
-    let url = format!(
-        "https://api.unsplash.com/photos/random?orientation=landscape&query={}&w={}&h={}",
-        urlencoding::encode(&query),
-        width,
-        height
-    );
+    // The key lives in the proxy, not here - see src/photos.rs.
+    let photo = photos::fetch_photo(http_client(), &query).await?;
 
-    let response = http_client()
-        .get(&url)
-        .header("Authorization", format!("Client-ID {}", unsplash_access_key()))
-        .send()
-        .await
-        .map_err(|e| format!("Failed to fetch photo: {}", e))?;
-    
-    // Check response status
-    let status = response.status();
-    if !status.is_success() {
-        let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
-        return Err(format!("Unsplash API error ({}): {}", status, error_text));
-    }
-    
-    let data: UnsplashApiResponse = response
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse photo data: {}", e))?;
-    
-    // Add cache-busting timestamp to prevent browser/CDN caching
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_millis();
-    
-    // Apply photo quality setting
-    let settings = get_settings().unwrap_or_default();
-    
-    // Parse quality as number (supports both string numbers like "100" and legacy text like "high")
-    let quality = match settings.photos.photo_quality.as_str() {
-        // Legacy string values (backwards compatibility)
-        "low" => 65,
-        "medium" => 80,
-        "high" => 100,
-        "maximum" => 100,
-        // Parse numeric strings directly
-        _ => settings.photos.photo_quality.parse::<u32>().unwrap_or(80)
-    };
-    
-    // Parse the URL and replace existing quality parameter
-    let mut url = data.urls.regular.clone();
-    
-    // Remove existing quality parameter if present
-    if let Some(pos) = url.find("&q=") {
-        if let Some(end_pos) = url[pos+1..].find('&') {
-            url.replace_range(pos..pos+end_pos+1, "");
-        } else {
-            url.truncate(pos);
-        }
-    }
-    
-    // Add our parameters
-    let separator = if url.contains('?') { "&" } else { "?" };
-    let photo_url = format!("{}{}w={}&h={}&fit=crop&q={}&t={}", url, separator, width, height, quality, timestamp);
-    
+    let settings = settings_manager::read_settings().unwrap_or_default();
+
     Ok(UnsplashPhoto {
-        url: photo_url,
-        author: data.user.name,
-        author_url: data.user.links.html,
-        download_location: data.links.download_location,
+        url: build_photo_url(&photo.raw_url, width, height, settings.photos.photo_quality)?,
+        author: photo.author,
+        author_url: photo.author_url,
+        download_location: photo.download_location,
     })
 }
 
 #[tauri::command]
 async fn trigger_unsplash_download(download_url: String) -> Result<(), String> {
-    let _response = http_client()
-        .get(&download_url)
-        .header("Authorization", format!("Client-ID {}", unsplash_access_key()))
-        .send()
-        .await
-        .map_err(|e| format!("Failed to trigger download: {}", e))?;
-    
+    photos::trigger_download(http_client(), &download_url).await;
     Ok(())
-}
-
-#[derive(Debug, Serialize)]
-pub struct CpuTemp {
-    pub value: f32,
-    pub display: String,
-}
-
-#[tauri::command]
-fn get_cpu_temp() -> Result<CpuTemp, String> {
-    #[cfg(target_os = "linux")]
-    {
-        match std::fs::read_to_string("/sys/class/thermal/thermal_zone0/temp") {
-            Ok(contents) => {
-                let temp_millidegrees: i32 = contents.trim()
-                    .parse()
-                    .map_err(|e| format!("Failed to parse temperature: {}", e))?;
-                let temp_celsius = temp_millidegrees as f32 / 1000.0;
-                
-                if temp_celsius <= 0.0 {
-                    return Ok(CpuTemp {
-                        value: 0.0,
-                        display: String::new(),
-                    });
-                }
-                
-                // Get settings for unit conversion
-                let settings = get_settings().unwrap_or_default();
-                let (display_temp, unit) = if settings.units.temperature_unit == "fahrenheit" {
-                    (temp_celsius * 9.0 / 5.0 + 32.0, "°F")
-                } else {
-                    (temp_celsius, "°C")
-                };
-                
-                Ok(CpuTemp {
-                    value: temp_celsius,
-                    display: format!("{} {}", display_temp.round() as i32, unit),
-                })
-            }
-            Err(_) => Ok(CpuTemp {
-                value: 0.0,
-                display: String::new(),
-            })
-        }
-    }
-    
-    #[cfg(not(target_os = "linux"))]
-    {
-        Ok(CpuTemp {
-            value: 0.0,
-            display: String::new(),
-        })
-    }
 }
 
 #[tauri::command]
 fn get_current_time() -> FormattedTime {
     get_current_time_impl()
+}
+
+/// Publish the photo the dashboard just displayed. This is in-process state, so the
+/// dashboard calls it directly instead of making an HTTP round-trip to our own
+/// server - which also means the API needs no cross-origin grant for any browser.
+#[tauri::command]
+fn set_current_photo(
+    photos: tauri::State<'_, http_server::PhotoChannel>,
+    photo: http_server::CurrentPhoto,
+) -> Result<(), String> {
+    photos.set(photo)
 }
 
 #[tauri::command]
@@ -855,125 +574,264 @@ fn is_cache_valid(cache_timestamp: u64) -> bool {
 }
 
 #[tauri::command]
-fn format_time_remaining(milliseconds: i64) -> String {
-    format_time_remaining_impl(milliseconds)
-}
-
-#[tauri::command]
 fn get_debug_info(
     cache_timestamp: Option<u64>,
     query: Option<String>,
     sunrise_iso: Option<String>,
     sunset_iso: Option<String>,
-    // Weather data
     temperature: Option<f64>,
     rain: Option<f64>,
     snowfall: Option<f64>,
     cloudcover: Option<f64>,
 ) -> DebugInfo {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_millis() as u64;
-
-    let photo_age = if let Some(ts) = cache_timestamp {
-        let diff = now.saturating_sub(ts);
-        let seconds = diff / 1000;
-        if seconds < 60 {
-            format!("{}s ago", seconds)
-        } else {
+    let photo_age = cache_timestamp
+        .map(|ts| {
+            let seconds = now_millis().saturating_sub(ts) / 1000;
             let minutes = seconds / 60;
-            if minutes < 60 {
+            let hours = minutes / 60;
+            if seconds < 60 {
+                format!("{}s ago", seconds)
+            } else if minutes < 60 {
                 format!("{}m ago", minutes)
+            } else if hours < 24 {
+                format!("{}h ago", hours)
             } else {
-                let hours = minutes / 60;
-                if hours < 24 {
-                    format!("{}h ago", hours)
-                } else {
-                    format!("{}d ago", hours / 24)
-                }
+                format!("{}d ago", hours / 24)
             }
-        }
-    } else {
-        "unknown".to_string()
-    };
+        })
+        .unwrap_or_else(|| "unknown".to_string());
 
-    let query_str = query.unwrap_or_else(|| "n/a".to_string());
-    let tod = get_time_of_day(sunrise_iso.clone(), sunset_iso.clone());
-    let season_info = get_season();
+    let tod = get_time_of_day_impl(sunrise_iso, sunset_iso);
+    let season = get_season_impl();
 
-    let (api_key_status, api_key_source) = match std::env::var("UNSPLASH_ACCESS_KEY") {
-        Ok(key) if key.len() > 10 && key != "YOUR_UNSPLASH_ACCESS_KEY" => {
-            ("Available".to_string(), "Runtime env".to_string())
-        },
-        _ => match option_env!("UNSPLASH_ACCESS_KEY") {
-            Some(key) if key.len() > 10 && key != "YOUR_UNSPLASH_ACCESS_KEY" => {
-                ("Available".to_string(), "Compile-time".to_string())
-            },
-            _ => ("Missing or invalid".to_string(), "None".to_string()),
-        },
-    };
+    // Reports where photos come from, never a key - the app never holds one. Every
+    // build fetches through the proxy, so this is always the proxy's address.
+    let photo_source = photos::proxy_base();
 
-    let settings = get_settings().unwrap_or_default();
+    let settings = settings_manager::read_settings().unwrap_or_default();
     let temp_unit = settings.units.temperature_unit.as_str();
 
     DebugInfo {
         photo_age,
-        query: query_str,
+        query: query.unwrap_or_else(|| "n/a".to_string()),
         time_source: tod.source,
         time_of_day: tod.time_of_day,
-        api_key_status,
-        api_key_source,
-        temperature: temperature.map(|t| {
-            if temp_unit == "fahrenheit" { format!("{:.1}\u{00b0}F", t) } else { format!("{:.1}\u{00b0}C", t) }
-        }).unwrap_or_else(|| "n/a".to_string()),
+        photo_source,
+        photo_mode: "Proxy".to_string(),
+        temperature: temperature
+            .map(|t| {
+                if temp_unit == "fahrenheit" {
+                    format!("{:.1}\u{00b0}F", t)
+                } else {
+                    format!("{:.1}\u{00b0}C", t)
+                }
+            })
+            .unwrap_or_else(|| "n/a".to_string()),
         rain: rain.map(|r| format!("{:.1}mm", r)).unwrap_or_else(|| "n/a".to_string()),
         snowfall: snowfall.map(|s| format!("{:.1}cm", s)).unwrap_or_else(|| "n/a".to_string()),
         cloudcover: cloudcover.map(|c| format!("{}%", c as i32)).unwrap_or_else(|| "n/a".to_string()),
-        season: season_info.season,
+        season: season.season,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn holiday_windows_are_bounded() {
+        assert_eq!(holiday_for(12, 25).as_deref(), Some("christmas"));
+        assert_eq!(holiday_for(12, 20).as_deref(), Some("christmas"));
+        assert_eq!(holiday_for(12, 26).as_deref(), Some("christmas"));
+        assert_eq!(holiday_for(12, 31).as_deref(), Some("new year"));
+        assert_eq!(holiday_for(1, 5).as_deref(), Some("new year"));
+        assert_eq!(holiday_for(10, 31).as_deref(), Some("halloween"));
+
+        // Early December is ordinary winter, not Christmas.
+        assert_eq!(holiday_for(12, 1), None);
+        assert_eq!(holiday_for(12, 19), None);
+        assert_eq!(holiday_for(1, 6), None);
+        assert_eq!(holiday_for(10, 24), None);
+        assert_eq!(holiday_for(4, 10), None);
+    }
+
+    #[test]
+    fn hour_fallback_is_not_always_night() {
+        assert_eq!(time_of_day_from_hour(0), "night");
+        assert_eq!(time_of_day_from_hour(6), "dawn");
+        assert_eq!(time_of_day_from_hour(12), "day");
+        assert_eq!(time_of_day_from_hour(19), "dusk");
+        assert_eq!(time_of_day_from_hour(23), "night");
+    }
+
+    #[test]
+    fn missing_sun_times_fall_back_to_the_clock() {
+        let tod = get_time_of_day_impl(None, None);
+        assert_eq!(tod.source, "fallback");
+        assert_eq!(tod.time_of_day, time_of_day_from_hour(Local::now().hour()));
+    }
+
+    #[test]
+    fn unparseable_sun_times_fall_back_to_the_clock() {
+        let tod = get_time_of_day_impl(Some("not-a-time".into()), Some("also-not".into()));
+        assert_eq!(tod.source, "fallback");
+    }
+
+    #[test]
+    fn sun_times_place_midday_between_dawn_and_dusk() {
+        let now = Local::now().naive_local();
+        let sunrise = (now - chrono::Duration::hours(4)).format("%Y-%m-%dT%H:%M").to_string();
+        let sunset = (now + chrono::Duration::hours(4)).format("%Y-%m-%dT%H:%M").to_string();
+
+        let tod = get_time_of_day_impl(Some(sunrise), Some(sunset));
+        assert_eq!(tod.source, "api");
+        assert_eq!(tod.time_of_day, "day");
+    }
+
+    #[test]
+    fn after_dusk_is_night() {
+        let now = Local::now().naive_local();
+        let sunrise = (now - chrono::Duration::hours(8)).format("%Y-%m-%dT%H:%M").to_string();
+        let sunset = (now - chrono::Duration::hours(2)).format("%Y-%m-%dT%H:%M").to_string();
+
+        let tod = get_time_of_day_impl(Some(sunrise), Some(sunset));
+        assert_eq!(tod.source, "api");
+        assert_eq!(tod.time_of_day, "night");
+    }
+
+    #[test]
+    fn festive_queries_can_be_disabled() {
+        let q = build_photo_query_impl(0.0, 0.0, 0.0, 0.0, 0, None, None, Some(false));
+        assert!(!["christmas", "new year", "halloween"].contains(&q.query.as_str()));
+    }
+
+    #[test]
+    fn precipitation_is_derived_from_the_weathercode() {
+        let weather = |weathercode, rain: f64, snowfall: f64| WeatherData {
+            temperature: 0.0,
+            temperature_unit: "celsius".to_string(),
+            humidity: 0.0,
+            wind_speed: 0.0,
+            wind_speed_unit: "kmh".to_string(),
+            wind_speed_label: "km/h".to_string(),
+            cloudcover: 0.0,
+            rain,
+            showers: 0.0,
+            snowfall,
+            weathercode,
+            sunrise: String::new(),
+            sunset: String::new(),
+            timezone: "UTC".to_string(),
+        };
+
+        let thunder = get_precipitation_display_impl(weather(95, 3.0, 0.0));
+        assert_eq!(thunder.label, "Thunder");
+        assert_eq!(thunder.value, "3.0 mm");
+
+        let snow = get_precipitation_display_impl(weather(75, 0.0, 5.0));
+        assert_eq!(snow.label, "Heavy Snow");
+        assert_eq!(snow.value, "5.0 cm");
+        assert_eq!(snow.icon, "snowflake.svg");
+
+        let fog = get_precipitation_display_impl(weather(45, 0.0, 0.0));
+        assert_eq!(fog.label, "Fog");
+
+        // Unknown code with no measurable precipitation reads as clear.
+        let clear = get_precipitation_display_impl(weather(0, 0.0, 0.0));
+        assert_eq!(clear.label, "Precip");
+        assert_eq!(clear.value, "Clear");
+
+        // Unknown code but measurable snow still reports snow.
+        let odd = get_precipitation_display_impl(weather(3, 0.0, 2.0));
+        assert_eq!(odd.label, "Snow");
+        assert_eq!(odd.value, "2.0 cm");
+    }
+
+    #[test]
+    fn photo_url_replaces_sizing_params_without_duplicating_them() {
+        let url = build_photo_url(
+            "https://images.unsplash.com/photo-1?ixid=ABC&q=80&w=1080&fit=max",
+            1920,
+            1080,
+            95,
+        )
+        .unwrap();
+
+        // Unsplash's own params survive, ours are set exactly once.
+        assert!(url.contains("ixid=ABC"));
+        assert_eq!(url.matches("q=").count(), 1);
+        assert_eq!(url.matches("w=").count(), 1);
+        assert!(url.contains("q=95"));
+        assert!(url.contains("w=1920"));
+        assert!(url.contains("h=1080"));
+        assert!(url.contains("fit=crop"));
+        assert!(!url.contains("fit=max"));
+    }
+
+    #[test]
+    fn photo_url_handles_a_base_with_no_query_at_all() {
+        let url = build_photo_url("https://images.unsplash.com/photo-2", 800, 600, 65).unwrap();
+        assert!(url.contains("?"));
+        assert!(url.contains("q=65"));
+        assert_eq!(url.matches("q=").count(), 1);
+    }
+
+    #[test]
+    fn photo_url_rejects_garbage_rather_than_producing_a_broken_url() {
+        assert!(build_photo_url("not a url", 800, 600, 80).is_err());
     }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Load .env file if it exists
+    // Load .env if present, so IDLEVIEW_PHOTO_PROXY can point the app at a local
+    // `wrangler dev` worker. The app never holds an Unsplash key - photos always go
+    // through the proxy, dev and release alike.
     let _ = dotenvy::dotenv();
-    
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let app_handle = app.handle().clone();
-            
-            // Start HTTP server in a separate thread with app handle
+
+            // One photo channel, shared by the HTTP server and the set_current_photo
+            // command, so both publish to the same SSE subscribers.
+            let photos = http_server::PhotoChannel::new();
+            app.manage(photos.clone());
+
             std::thread::spawn(move || {
-                let runtime = tokio::runtime::Runtime::new().unwrap();
+                let runtime = match tokio::runtime::Runtime::new() {
+                    Ok(runtime) => runtime,
+                    Err(e) => {
+                        eprintln!("Failed to start HTTP runtime: {}", e);
+                        return;
+                    }
+                };
                 runtime.block_on(async move {
-                    if let Err(e) = http_server::start_server(8737, app_handle).await {
+                    if let Err(e) = http_server::start_server(HTTP_PORT, app_handle, photos).await {
                         eprintln!("HTTP server error: {}", e);
                     }
                 });
             });
-            
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             get_location,
             get_weather,
             get_unsplash_photo,
-            get_cpu_temp,
             trigger_unsplash_download,
-            get_season,
-            get_holiday,
-            get_time_of_day,
             build_photo_query,
             get_current_time,
+            set_current_photo,
             get_precipitation_display,
             is_cache_valid,
-            format_time_remaining,
             get_debug_info,
             get_settings,
             save_settings,
             reset_settings,
+            get_server_info,
+            get_font_catalogue,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

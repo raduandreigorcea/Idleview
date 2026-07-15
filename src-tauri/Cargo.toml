@@ -1,6 +1,6 @@
 [package]
 name = "idleview"
-version = "1.0.0"
+version = "0.1.0"
 description = "App for always-on screens"
 authors = ["radua"]
 edition = "2021"
@@ -15,8 +15,8 @@ name = "idleview_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
+# `dotenv` (unmaintained) is gone with the build-time key embed it existed to serve.
 tauri-build = { version = "2", features = [] }
-dotenv = "0.15"
 
 [dependencies]
 tauri = { version = "2", features = [] }
@@ -28,17 +28,15 @@ dotenvy = "0.15"
 urlencoding = "2.1"
 chrono = "0.4"
 dirs = "5.0"
+rand = "0.8"
 # HTTP server dependencies
 axum = "0.7"
 tokio = { version = "1", features = ["full"] }
-tower-http = { version = "0.5", features = ["fs", "cors", "trace"] }
+# No "cors" feature: the API grants no cross-origin access, so the layer is dead weight.
+tower-http = { version = "0.5", features = ["fs", "trace"] }
 tower = "0.5"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 local-ip-address = "0.6"
 async-stream = "0.3"
 futures = "0.3"
-
-[[test]]
-name = "rust"
-path = "../tests/rust.rs"

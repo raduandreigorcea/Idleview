@@ -1,0 +1,16 @@
+{
+  "name": "idleview-photos",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Cloudflare Worker that holds the Unsplash key so the desktop app never ships it",
+  "scripts": {
+    "test": "vitest run",
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.7",
+    "wrangler": "^4.110.0"
+  }
+}

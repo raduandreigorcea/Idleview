@@ -4,7 +4,9 @@
   "version": "0.1.0",
   "identifier": "com.radua.idleview",
   "build": {
-    "frontendDist": "../src"
+    "frontendDist": "../src",
+    "beforeDevCommand": "npm --prefix idleview-control install && npm --prefix idleview-control run build",
+    "beforeBuildCommand": "npm --prefix idleview-control install && npm --prefix idleview-control run build"
   },
   "app": {
     "withGlobalTauri": true,
@@ -15,7 +17,7 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; script-src 'self'; connect-src 'self' ipc: http://ipc.localhost; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
     }
   },
   "bundle": {

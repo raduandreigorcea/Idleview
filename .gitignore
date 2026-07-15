@@ -12,9 +12,14 @@ dist
 dist-ssr
 *.local
 
-# Environment variables
+# Environment variables. The Unsplash key lives in the Cloudflare Worker's secret store
+# (and, for local development only, here) - never in anything that ships.
 .env
 .env.local
+
+# Cloudflare Worker local state (proxy/)
+proxy/.wrangler
+proxy/node_modules
 
 # Editor directories and files
 .vscode/*
@@ -33,4 +38,15 @@ installers
 # Docker build files (internal use only)
 linux-build
 
-tests
+# Knowledge graph output (graphify)
+graphify-out
+
+# Built control panel. Generated from the idleview-control submodule by tauri's
+# beforeDev/beforeBuild command, so it is no longer committed - every vite build
+# emits freshly hash-named assets, and committing them orphaned the previous set
+# into history on each build while leaving two copies of the panel to ship the
+# wrong one from.
+#
+# The leading slash matters: "idleview-control" unanchored would also match the
+# submodule at the repo root, which IS tracked (as a gitlink).
+/src-tauri/idleview-control/

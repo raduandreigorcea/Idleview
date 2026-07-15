@@ -1,21 +1,49 @@
 name: Release
 
-# Builds the Tauri desktop app for Windows and Linux and publishes the installers to a
-# GitHub Release. Trigger it by pushing a tag like `v0.1.0`, or run it by hand from the
-# Actions tab (workflow_dispatch). The release tag/name are taken from the version in
-# src-tauri/tauri.conf.json via tauri-action's __VERSION__ substitution.
+# Every push to main cuts a new release: the version is auto-bumped (patch) from the
+# latest v* tag, the Tauri app is built for Windows and Linux, and the installers are
+# published to a fresh GitHub Release. You can also run it by hand from the Actions tab.
+#
+# To push without cutting a release, put [skip release] anywhere in the commit message.
 on:
   push:
-    tags:
-      - 'v*'
+    branches:
+      - main
   workflow_dispatch:
 
-# tauri-action needs to create the release and upload assets to it.
+# tauri-action creates the tag + release and uploads assets to it.
 permissions:
   contents: write
 
 jobs:
-  release:
+  # Work out the next version from the highest existing v* tag, so releases march forward
+  # on their own (v0.1.0 -> v0.1.1 -> ...). Nothing is committed back to the repo - the
+  # tags are the source of truth, which keeps your local main in sync without a pull.
+  version:
+    if: ${{ !contains(github.event.head_commit.message, '[skip release]') }}
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.compute.outputs.version }}
+    steps:
+      - name: Checkout (full history + tags)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Compute next version
+        id: compute
+        run: |
+          latest=$(git tag -l 'v*' --sort=-v:refname | head -n1)
+          latest=${latest:-v0.0.0}
+          base=${latest#v}
+          IFS='.' read -r major minor patch <<< "$base"
+          next="${major}.${minor}.$((patch + 1))"
+          echo "Latest tag: ${latest} -> next: v${next}"
+          echo "version=${next}" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: version
     strategy:
       fail-fast: false
       matrix:
@@ -35,6 +63,15 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
+
+      # Stamp the computed version into tauri.conf.json so the installers carry it. This
+      # edit lives only on the runner; it is never committed.
+      - name: Set release version
+        shell: bash
+        env:
+          V: ${{ needs.version.outputs.version }}
+        run: |
+          node -e "const fs=require('fs');const f='src-tauri/tauri.conf.json';const j=JSON.parse(fs.readFileSync(f));j.version=process.env.V;fs.writeFileSync(f,JSON.stringify(j,null,2)+'\n')"
 
       # Tauri v2's Linux toolchain. `rpm` is needed for the .rpm bundle target.
       - name: Install Linux system dependencies
@@ -78,10 +115,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          # __VERSION__ is replaced with the version from tauri.conf.json, so both runners
-          # target the same release and the tag stays in step with the app version.
-          tagName: v__VERSION__
-          releaseName: 'Idleview v__VERSION__'
+          tagName: v${{ needs.version.outputs.version }}
+          releaseName: 'Idleview v${{ needs.version.outputs.version }}'
           releaseBody: 'Automated build. Installers are attached below.'
           releaseDraft: false
           prerelease: false

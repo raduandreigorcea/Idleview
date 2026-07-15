@@ -56,7 +56,7 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -66,6 +66,12 @@ jobs:
         uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+
+      # tauri-action drives the build through this repo's `npm run tauri build`, which
+      # needs @tauri-apps/cli from the root package.json. beforeBuildCommand only installs
+      # the control panel's deps, so the root deps have to be installed here.
+      - name: Install root dependencies
+        run: npm install
 
       - name: Build and publish
         uses: tauri-apps/tauri-action@v0

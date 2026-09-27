@@ -26,7 +26,6 @@ const PHOTO_RETRY: Duration = Duration::from_secs(5 * 60);
 
 pub enum Command {
     SettingsChanged,
-    RefreshPhoto,
 }
 
 /// Handle to the running dashboard, managed as Tauri state.
@@ -124,10 +123,6 @@ async fn run(
         tokio::select! {
             _ = tokio::time::sleep(until_next_minute()) => {}
             command = commands.recv() => match command {
-                Some(Command::RefreshPhoto) => {
-                    state.photo_forced = true;
-                    state.photo_retry_at = Instant::now();
-                }
                 Some(Command::SettingsChanged) => {}
                 None => return,
             },

@@ -234,17 +234,6 @@ async fn get_current_photo(
     state.photos.get().map(Json).map_err(AppError::internal)
 }
 
-/// POST /api/photo/refresh - ask the screen for a new photo now.
-async fn refresh_photo(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<Json<serde_json::Value>, AppError> {
-    authorize(&headers)?;
-    state.dashboard.send(Command::RefreshPhoto);
-    info!("Photo refresh requested by the control panel");
-    Ok(Json(json!({ "ok": true })))
-}
-
 /// GET /api/events - Server-Sent Events stream for real-time updates
 async fn events_stream(
     State(state): State<AppState>,
@@ -275,7 +264,6 @@ fn create_router(state: AppState, static_dir: PathBuf) -> Router {
         )
         .route("/settings/reset", post(reset_settings))
         .route("/photo/current", get(get_current_photo))
-        .route("/photo/refresh", post(refresh_photo))
         .route("/auth/check", get(auth_check))
         .route("/events", get(events_stream))
         .route("/health", get(health_check));

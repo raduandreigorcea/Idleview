@@ -22,22 +22,52 @@ fn get_view(dashboard: tauri::State<'_, dashboard::Dashboard>) -> Option<idlevie
 pub struct ServerInfo {
     pub port: u16,
     pub token: String,
-    pub urls: Vec<String>,
+    /// The panel address a phone on this network can reach.
+    pub url: String,
+    /// A QR code of `url` with the token in its fragment, as an SVG data URL: scanning
+    /// it opens the panel already paired.
+    pub qr: String,
+}
+
+/// The panel address with the token after `#`. A fragment is never sent to a server,
+/// so the token stays out of request logs; the panel reads it and then erases it.
+pub fn pairing_url(base: &str, token: &str) -> String {
+    format!("{base}/#token={token}")
+}
+
+/// An SVG data URL, so the page shows it with a plain <img> (no markup injected).
+fn qr_data_url(text: &str) -> Result<String, String> {
+    use qrcode::render::svg;
+    let code = qrcode::QrCode::new(text.as_bytes()).map_err(|e| e.to_string())?;
+    let svg = code
+        .render::<svg::Color>()
+        .min_dimensions(240, 240)
+        .quiet_zone(true)
+        .build();
+    Ok(format!(
+        "data:image/svg+xml;charset=utf-8,{}",
+        urlencoding::encode(&svg)
+    ))
 }
 
 /// What the dashboard needs to show a pairing card: where the control panel lives
 /// and the token required to change anything through it.
 #[tauri::command]
 fn get_server_info() -> Result<ServerInfo, String> {
+    let token = settings_manager::ensure_auth_token()?;
+    // The LAN address: 127.0.0.1 is useless to the phone being paired.
+    let ips = http_server::get_local_ips();
+    let ip = ips.iter().find(|ip| *ip != "127.0.0.1").unwrap_or(&ips[0]);
+    let url = format!("http://{ip}:{HTTP_PORT}");
+
     Ok(ServerInfo {
         port: HTTP_PORT,
-        token: settings_manager::ensure_auth_token()?,
-        urls: http_server::get_local_ips()
-            .into_iter()
-            .map(|ip| format!("http://{}:{}", ip, HTTP_PORT))
-            .collect(),
+        qr: qr_data_url(&pairing_url(&url, &token))?,
+        token,
+        url,
     })
 }
+
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -72,4 +102,24 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![get_view, get_server_info])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_token_travels_in_the_fragment_not_the_query() {
+        let url = pairing_url("http://192.168.1.130:8737", "K7PMX2QD");
+        assert_eq!(url, "http://192.168.1.130:8737/#token=K7PMX2QD");
+        assert!(!url.contains('?'), "a query string would reach the server's logs");
+    }
+
+    #[test]
+    fn the_qr_code_is_an_svg_image() {
+        let qr = qr_data_url(&pairing_url("http://192.168.1.130:8737", "K7PMX2QD")).unwrap();
+        assert!(qr.starts_with("data:image/svg+xml;charset=utf-8,"));
+        let svg = urlencoding::decode(qr.split_once(',').unwrap().1).unwrap();
+        assert!(svg.contains("<svg") && svg.contains("</svg>"));
+    }
 }

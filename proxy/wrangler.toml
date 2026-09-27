@@ -19,8 +19,3 @@ simple = { limit = 20, period = 60 }
 [build]
 command = "npm run build:core"
 
-# The web version of the screen: the page from the Idleview-Web submodule, the same one
-# the desktop app bundles. Requests that match a file get it; everything else
-# (/api/...) reaches the Worker.
-[assets]
-directory = "../web/page"

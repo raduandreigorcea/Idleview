@@ -234,3 +234,52 @@ describe('web view', () => {
     expect(url.searchParams.get('fit')).toBe('crop')
   })
 })
+
+describe('CORS for the web page', () => {
+  const pages = 'https://raduandreigorcea.github.io'
+
+  it('lets the GitHub Pages site read the view and send the attribution ping', async () => {
+    const { ctx } = runtime()
+    unsplashStub()
+
+    const view = await worker.fetch(new Request('https://proxy.test/api/view', { headers: { Origin: pages } }), env, ctx)
+    expect(view.headers.get('Access-Control-Allow-Origin')).toBe(pages)
+
+    const preflight = await worker.fetch(new Request('https://proxy.test/api/photo/download', {
+      method: 'OPTIONS', headers: { Origin: pages, 'Access-Control-Request-Method': 'POST' }
+    }), env, ctx)
+    expect(preflight.status).toBe(204)
+    expect(preflight.headers.get('Access-Control-Allow-Origin')).toBe(pages)
+    expect(preflight.headers.get('Access-Control-Allow-Headers')).toContain('Content-Type')
+  })
+
+  it('gives any other site nothing it can read', async () => {
+    const { ctx } = runtime()
+    unsplashStub()
+
+    const res = await worker.fetch(new Request('https://proxy.test/api/view', { headers: { Origin: 'https://evil.test' } }), env, ctx)
+    expect(res.headers.get('Access-Control-Allow-Origin')).toBeNull()
+
+    const preflight = await worker.fetch(new Request('https://proxy.test/api/photo/download', {
+      method: 'OPTIONS', headers: { Origin: 'https://evil.test' }
+    }), env, ctx)
+    expect(preflight.status).toBe(403)
+  })
+
+  it('never opens the app\'s photo endpoint to browsers', async () => {
+    const { ctx } = runtime()
+    unsplashStub()
+
+    const res = await worker.fetch(new Request('https://proxy.test/api/photo?query=summer', { headers: { Origin: pages } }), env, ctx)
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Access-Control-Allow-Origin')).toBeNull()
+  })
+
+  it('keeps the header on errors, so the page sees a 429 and not a CORS failure', async () => {
+    const { ctx } = runtime()
+    const limited = { ...env, LIMITER: { limit: async () => ({ success: false }) } }
+    const res = await worker.fetch(new Request('https://proxy.test/api/view', { headers: { Origin: pages } }), limited, ctx)
+    expect(res.status).toBe(429)
+    expect(res.headers.get('Access-Control-Allow-Origin')).toBe(pages)
+  })
+})

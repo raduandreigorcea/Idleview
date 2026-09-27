@@ -20,13 +20,14 @@
 //     global if the quota ever gets tight.)
 //   - A per-IP rate limit backs both up.
 //
-// It also serves the web version of the screen: the page itself (static assets from
-// the Idleview-Web submodule, see wrangler.toml) and GET /api/view, which returns the finished view for the
-// visitor's location and local time. The view and the photo search are computed by
-// idleview-core, the same Rust as the desktop app, compiled to WebAssembly (core.js).
-// Visitors cannot choose a search, so the web adds no way to spend the quota.
+// It also feeds the web version of the screen, whose page is hosted on GitHub Pages
+// (the Idleview-Web repo): GET /api/view returns the finished view for the visitor's
+// location and local time. The view and the photo search are computed by idleview-core,
+// the same Rust as the desktop app, compiled to WebAssembly (core.js). Visitors cannot
+// choose a search, so the web adds no way to spend the quota.
 //
-// No CORS headers: the page is served from this same origin, and the app calls from Rust.
+// CORS: only the web page's origin, and only on the two endpoints the page calls. The
+// app's /api/photo stays without - the app calls from Rust, not from a browser.
 
 import QUERIES from './queries.json'
 import * as core from './core.js'
@@ -38,30 +39,61 @@ const CACHE_SECONDS = 30 * 60
 const WEB_PHOTO_SLOT_MS = 30 * 60 * 1000
 const WEATHER_CACHE_SECONDS = 15 * 60
 
+/** Where the web page is hosted (GitHub Pages). */
+const WEB_ORIGINS = new Set(['https://raduandreigorcea.github.io'])
+/** What the web page calls. Nothing else is readable cross-origin. */
+const WEB_PATHS = new Set(['/api/view', '/api/photo/download'])
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url)
+    if (!WEB_PATHS.has(url.pathname)) return route(request, env, ctx, url)
 
-    try {
-      if (!(await withinRateLimit(request, env))) {
-        return json({ error: 'Too many requests, slow down' }, 429)
-      }
-      if (url.pathname === '/api/photo' && request.method === 'GET') {
-        return await handlePhoto(url, env, ctx)
-      }
-      if (url.pathname === '/api/view' && request.method === 'GET') {
-        return await handleView(request, env, ctx)
-      }
-      if (url.pathname === '/api/photo/download' && request.method === 'POST') {
-        return await handleDownload(request, env)
-      }
-      if (url.pathname === '/api/health' && request.method === 'GET') {
-        return json({ status: 'healthy' }, 200)
-      }
-      return json({ error: 'Not found' }, 404)
-    } catch (error) {
-      return json({ error: error?.message || 'Unexpected error' }, 500)
+    const cors = corsHeaders(request)
+    // The page's download ping is JSON, so the browser asks first.
+    if (request.method === 'OPTIONS') {
+      return new Response(null, {
+        status: cors['Access-Control-Allow-Origin'] ? 204 : 403,
+        headers: { ...cors, 'Access-Control-Allow-Methods': 'GET, POST', 'Access-Control-Allow-Headers': 'Content-Type', 'Access-Control-Max-Age': '86400' }
+      })
     }
+
+    // Errors carry the header too, so the page can read a 429 rather than a CORS failure.
+    const response = await route(request, env, ctx, url)
+    const withCors = new Response(response.body, response)
+    for (const [name, value] of Object.entries(cors)) withCors.headers.set(name, value)
+    return withCors
+  }
+}
+
+/** CORS for the web page's origin only; any other origin gets nothing it can read. */
+export function corsHeaders(request) {
+  const origin = request.headers.get('Origin')
+  return WEB_ORIGINS.has(origin)
+    ? { 'Access-Control-Allow-Origin': origin, Vary: 'Origin' }
+    : { Vary: 'Origin' }
+}
+
+async function route(request, env, ctx, url) {
+  try {
+    if (!(await withinRateLimit(request, env))) {
+      return json({ error: 'Too many requests, slow down' }, 429)
+    }
+    if (url.pathname === '/api/photo' && request.method === 'GET') {
+      return await handlePhoto(url, env, ctx)
+    }
+    if (url.pathname === '/api/view' && request.method === 'GET') {
+      return await handleView(request, env, ctx)
+    }
+    if (url.pathname === '/api/photo/download' && request.method === 'POST') {
+      return await handleDownload(request, env)
+    }
+    if (url.pathname === '/api/health' && request.method === 'GET') {
+      return json({ status: 'healthy' }, 200)
+    }
+    return json({ error: 'Not found' }, 404)
+  } catch (error) {
+    return json({ error: error?.message || 'Unexpected error' }, 500)
   }
 }
 

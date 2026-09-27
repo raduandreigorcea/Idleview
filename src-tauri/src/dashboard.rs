@@ -76,9 +76,7 @@ struct State {
     weather_due: Instant,
     precip: Option<Precip>,
     photo: Option<CachedPhoto>,
-    photo_forced: bool,
     photo_retry_at: Instant,
-    festive: bool,
 }
 
 async fn run(
@@ -87,7 +85,6 @@ async fn run(
     mut commands: mpsc::UnboundedReceiver<Command>,
     latest: Arc<Mutex<Option<View>>>,
 ) {
-    let settings = settings_manager::read_settings().unwrap_or_default();
     let mut state = State {
         client: reqwest::Client::builder()
             .timeout(Duration::from_secs(20))
@@ -98,9 +95,7 @@ async fn run(
         weather_due: Instant::now(),
         precip: None,
         photo: load_cached_photo(),
-        photo_forced: false,
         photo_retry_at: Instant::now(),
-        festive: settings.photos.enable_festive_queries,
     };
     if let Some(cached) = &state.photo {
         let _ = photo_channel.set(cached.photo.clone());
@@ -108,12 +103,6 @@ async fn run(
 
     loop {
         let settings = settings_manager::read_settings().unwrap_or_default();
-        if state.festive != settings.photos.enable_festive_queries {
-            // Changes which photo is right, not just how long one lasts.
-            state.festive = settings.photos.enable_festive_queries;
-            state.photo_forced = true;
-        }
-
         // Publish before and after the network work, so a slow fetch never holds
         // the clock back.
         publish(&app, &latest, &state, &settings);
@@ -162,8 +151,14 @@ impl State {
             .as_ref()
             .is_none_or(|cached| Utc::now().timestamp() - cached.fetched_at >= max_age);
 
-        if (stale || self.photo_forced) && Instant::now() >= self.photo_retry_at {
-            let query = idleview_core::photo_query(local_now(), self.weather.as_ref(), self.festive);
+        // Only ever on schedule. Nothing a client does - toggling a setting included -
+        // can make the screen fetch a photo early.
+        if stale && Instant::now() >= self.photo_retry_at {
+            let query = idleview_core::photo_query(
+                local_now(),
+                self.weather.as_ref(),
+                settings.photos.enable_festive_queries,
+            );
             let (width, height) = screen_size(app);
 
             match photos::fetch(&self.client, &query, width, height).await {
@@ -181,7 +176,6 @@ impl State {
                     save_cached_photo(&cached);
                     let _ = photo_channel.set(cached.photo.clone());
                     self.photo = Some(cached);
-                    self.photo_forced = false;
                 }
                 Err(e) => {
                     // Keep showing the old photo.

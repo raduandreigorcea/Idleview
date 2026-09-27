@@ -26,7 +26,9 @@
       "nsis",
       "msi",
       "deb",
-      "rpm"
+      "rpm",
+      "app",
+      "dmg"
     ],
     "icon": [
       "icons/32x32.png",

@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use std::convert::Infallible;
 use tauri::Manager;
 use tower::ServiceBuilder;
-use tower_http::{services::ServeDir, trace::TraceLayer};
+use tower_http::{services::ServeDir, set_header::SetResponseHeaderLayer, trace::TraceLayer};
 use tracing::{info, error};
 use tokio::sync::broadcast;
 use futures::stream::Stream;
@@ -372,7 +372,18 @@ fn create_router(state: AppState, static_dir: PathBuf) -> Router {
     // gated by `authorize` instead.
     Router::new()
         .nest("/api", api_routes)
-        .nest_service("/", ServeDir::new(static_dir))
+        // no-cache: the browser must check back before reusing the panel, or a phone
+        // keeps running the old one after an app update. (Unchanged files still come
+        // back as a cheap 304.)
+        .nest_service(
+            "/",
+            ServiceBuilder::new()
+                .layer(SetResponseHeaderLayer::overriding(
+                    axum::http::header::CACHE_CONTROL,
+                    axum::http::HeaderValue::from_static("no-cache"),
+                ))
+                .service(ServeDir::new(static_dir)),
+        )
         .layer(ServiceBuilder::new().layer(TraceLayer::new_for_http()))
         .with_state(state)
 }

@@ -56,7 +56,7 @@ struct ProxyError {
     error: String,
 }
 
-pub async fn fetch_photo(client: &reqwest::Client, query: &str) -> Result<SourcePhoto, String> {
+async fn fetch_photo(client: &reqwest::Client, query: &str) -> Result<SourcePhoto, String> {
     let url = format!(
         "{}/api/photo?query={}",
         proxy_base(),
@@ -94,6 +94,60 @@ pub async fn fetch_photo(client: &reqwest::Client, query: &str) -> Result<Source
     })
 }
 
+/// Photo quality (imgix `q`). 80 is visually indistinguishable from 100 on a wall
+/// screen and roughly half the bytes.
+const QUALITY: u8 = 80;
+
+/// A photo ready to show, plus the attribution ping Unsplash requires once it is used.
+pub struct FetchedPhoto {
+    pub photo: idleview_core::Photo,
+    pub download_location: String,
+}
+
+/// Fetch a photo for `query`, sized for a `width` x `height` screen.
+pub async fn fetch(
+    client: &reqwest::Client,
+    query: &str,
+    width: u32,
+    height: u32,
+) -> Result<FetchedPhoto, String> {
+    let source = fetch_photo(client, query).await?;
+    Ok(FetchedPhoto {
+        photo: idleview_core::Photo {
+            url: sized_url(&source.raw_url, width, height)?,
+            author: source.author,
+            author_url: source.author_url,
+        },
+        download_location: source.download_location,
+    })
+}
+
+/// Rewrite an Unsplash CDN URL to our size and quality. Parsing rather than splicing
+/// strings means a change to Unsplash's parameters cannot produce a malformed URL or
+/// a duplicate `q=`.
+fn sized_url(base: &str, width: u32, height: u32) -> Result<String, String> {
+    let mut url = reqwest::Url::parse(base)
+        .map_err(|e| format!("Unsplash returned an unparseable photo URL: {}", e))?;
+
+    // Keep Unsplash's own tracking/identity params, drop the sizing ones we set.
+    let ours = ["w", "h", "fit", "q"];
+    let kept: Vec<(String, String)> = url
+        .query_pairs()
+        .filter(|(key, _)| !ours.contains(&key.as_ref()))
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+        .collect();
+
+    url.query_pairs_mut()
+        .clear()
+        .extend_pairs(&kept)
+        .append_pair("w", &width.to_string())
+        .append_pair("h", &height.to_string())
+        .append_pair("fit", "crop")
+        .append_pair("q", &QUALITY.to_string());
+
+    Ok(url.to_string())
+}
+
 /// Unsplash's terms require a ping to `download_location` whenever a photo is actually
 /// used. Best-effort: a failed attribution ping must never stop the photo being shown.
 pub async fn trigger_download(client: &reqwest::Client, download_location: &str) {
@@ -119,6 +173,27 @@ pub async fn trigger_download(client: &reqwest::Client, download_location: &str)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sizing_params_are_replaced_not_duplicated() {
+        let url = sized_url("https://images.unsplash.com/photo-1?ixid=ABC&q=80&w=1080&fit=max", 1920, 1080).unwrap();
+        assert!(url.contains("ixid=ABC"));
+        assert_eq!(url.matches("q=").count(), 1);
+        assert_eq!(url.matches("w=").count(), 1);
+        assert!(url.contains("w=1920") && url.contains("h=1080") && url.contains("fit=crop"));
+        assert!(!url.contains("fit=max"));
+    }
+
+    #[test]
+    fn a_base_with_no_query_gets_one() {
+        let url = sized_url("https://images.unsplash.com/photo-2", 800, 600).unwrap();
+        assert!(url.contains("?") && url.contains("q=80"));
+    }
+
+    #[test]
+    fn garbage_is_rejected_rather_than_producing_a_broken_url() {
+        assert!(sized_url("not a url", 800, 600).is_err());
+    }
 
     #[test]
     fn the_proxy_base_has_no_trailing_slash_to_double_up_on() {

@@ -1921,6 +1921,7 @@ dependencies = [
  "dirs 5.0.1",
  "dotenvy",
  "futures",
+ "idleview-core",
  "local-ip-address",
  "rand 0.8.5",
  "reqwest",
@@ -1935,6 +1936,14 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "urlencoding",
+]
+
+[[package]]
+name = "idleview-core"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
 ]
 
 [[package]]

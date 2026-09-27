@@ -5,13 +5,12 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::convert::Infallible;
-use tauri::{Emitter, Manager};
+use tauri::Manager;
 use tower::ServiceBuilder;
 use tower_http::{services::ServeDir, trace::TraceLayer};
 use tracing::{info, error};
@@ -19,7 +18,9 @@ use tokio::sync::broadcast;
 use futures::stream::Stream;
 use async_stream::stream;
 
-use crate::settings_manager::{self, Settings, SettingsManager};
+use crate::dashboard::{Command, Dashboard};
+use crate::settings_manager::{self, Settings};
+use idleview_core::Photo;
 
 /// Header carrying the shared token that authorises a write.
 const TOKEN_HEADER: &str = "x-idleview-token";
@@ -27,20 +28,12 @@ const TOKEN_HEADER: &str = "x-idleview-token";
 /// resulting broadcast as its own echo and skip reloading.
 const CLIENT_HEADER: &str = "x-idleview-client";
 
-/// Current photo information
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CurrentPhoto {
-    pub url: String,
-    pub author: String,
-    pub author_url: String,
-}
-
 /// The currently displayed photo plus the SSE fan-out channel. Shared between the
 /// HTTP handlers and the Tauri command the dashboard calls, so both publish photo
 /// changes the same way.
 #[derive(Clone)]
 pub struct PhotoChannel {
-    current: Arc<Mutex<Option<CurrentPhoto>>>,
+    current: Arc<Mutex<Option<Photo>>>,
     events: broadcast::Sender<String>,
 }
 
@@ -53,14 +46,14 @@ impl PhotoChannel {
         }
     }
 
-    pub fn get(&self) -> Result<Option<CurrentPhoto>, String> {
+    pub fn get(&self) -> Result<Option<Photo>, String> {
         self.current
             .lock()
             .map(|photo| photo.clone())
             .map_err(|e| format!("Failed to lock photo state: {}", e))
     }
 
-    pub fn set(&self, photo: CurrentPhoto) -> Result<(), String> {
+    pub fn set(&self, photo: Photo) -> Result<(), String> {
         {
             let mut current = self
                 .current
@@ -93,8 +86,7 @@ impl Default for PhotoChannel {
 /// Application state shared across handlers
 #[derive(Clone)]
 pub struct AppState {
-    pub settings_manager: SettingsManager,
-    pub app_handle: tauri::AppHandle,
+    pub dashboard: Dashboard,
     pub photos: PhotoChannel,
 }
 
@@ -163,49 +155,28 @@ fn client_id(headers: &HeaderMap) -> Option<String> {
         .map(|value| value.to_string())
 }
 
-/// Announce a settings change to everyone listening: the Tauri window via its event
-/// channel, and any browser control panels via SSE. Every mutating handler must call
+/// Announce a settings change to everyone listening: the dashboard, which re-renders,
+/// and any browser control panels via SSE. Every mutating handler must call
 /// it - a handler that skips it leaves other open panels stale.
 ///
 /// The payload is the redacted view. Secrets must never reach an SSE subscriber.
 fn notify_settings_changed(state: &AppState, settings: &Settings, origin: Option<String>) {
-    let redacted = settings.redacted();
-    let _ = state.app_handle.emit("settings-updated", &redacted);
+    state.dashboard.send(Command::SettingsChanged);
     state.photos.broadcast(&json!({
         "type": "settings-updated",
-        "settings": redacted,
+        "settings": settings.redacted(),
         "origin": origin,
     }));
 }
 
 /// GET /api/settings - current settings, minus anything secret
-async fn get_settings(State(state): State<AppState>) -> Result<Json<serde_json::Value>, AppError> {
-    state
-        .settings_manager
-        .get()
+async fn get_settings() -> Result<Json<serde_json::Value>, AppError> {
+    settings_manager::read_settings()
         .map(|settings| Json(settings.redacted()))
         .map_err(|e| {
             error!("Failed to get settings: {}", e);
             AppError::internal(e)
         })
-}
-
-/// PUT /api/settings - replace all settings with the JSON body
-async fn update_settings(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(new_settings): Json<Settings>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    authorize(&headers)?;
-
-    let saved = state.settings_manager.update_all(new_settings).map_err(|e| {
-        error!("Failed to replace settings: {}", e);
-        AppError::internal(e)
-    })?;
-
-    info!("Settings replaced successfully");
-    notify_settings_changed(&state, &saved, client_id(&headers));
-    Ok(Json(saved.redacted()))
 }
 
 /// PATCH /api/settings - merge a partial JSON body into the current settings
@@ -216,7 +187,7 @@ async fn patch_settings(
 ) -> Result<Json<serde_json::Value>, AppError> {
     authorize(&headers)?;
 
-    let saved = state.settings_manager.update_partial(updates).map_err(|e| {
+    let saved = settings_manager::update_settings_partial(updates).map_err(|e| {
         error!("Failed to partially update settings: {}", e);
         AppError::internal(e)
     })?;
@@ -233,9 +204,7 @@ async fn reset_settings(
 ) -> Result<Json<serde_json::Value>, AppError> {
     authorize(&headers)?;
 
-    let saved = state
-        .settings_manager
-        .update_all(Settings::default())
+    let saved = settings_manager::write_settings(&Settings::default())
         .map_err(|e| {
             error!("Failed to reset settings: {}", e);
             AppError::internal(e)
@@ -253,14 +222,6 @@ async fn auth_check(headers: HeaderMap) -> Result<Json<serde_json::Value>, AppEr
     Ok(Json(json!({ "ok": true })))
 }
 
-/// GET /api/fonts - the font catalogue the picker is built from.
-///
-/// Open, like the other reads. Serving it means the panel cannot offer a font the
-/// dashboard will not render, which is what the hand-copied lists kept getting wrong.
-async fn get_fonts() -> Json<crate::fonts::FontCatalogue> {
-    Json(crate::fonts::catalogue())
-}
-
 /// Health check endpoint
 async fn health_check() -> Json<serde_json::Value> {
     Json(json!({ "status": "healthy", "service": "idleview-api" }))
@@ -269,37 +230,17 @@ async fn health_check() -> Json<serde_json::Value> {
 /// GET /api/photo/current - what the screen is showing right now
 async fn get_current_photo(
     State(state): State<AppState>,
-) -> Result<Json<Option<CurrentPhoto>>, AppError> {
+) -> Result<Json<Option<Photo>>, AppError> {
     state.photos.get().map(Json).map_err(AppError::internal)
 }
 
-/// POST /api/photo/current - publish a photo
-async fn update_current_photo(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(photo): Json<CurrentPhoto>,
-) -> Result<Json<CurrentPhoto>, AppError> {
-    authorize(&headers)?;
-    state.photos.set(photo.clone()).map_err(AppError::internal)?;
-    Ok(Json(photo))
-}
-
-/// POST /api/photo/refresh - ask the dashboard for a new photo now.
-///
-/// The dashboard has always listened for `refresh-photo` (and implemented
-/// window.refreshPhoto), but nothing ever emitted the event, so the capability was
-/// unreachable from the control panel. This is the missing half.
+/// POST /api/photo/refresh - ask the screen for a new photo now.
 async fn refresh_photo(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, AppError> {
     authorize(&headers)?;
-
-    state
-        .app_handle
-        .emit("refresh-photo", ())
-        .map_err(|e| AppError::internal(format!("Failed to request a refresh: {}", e)))?;
-
+    state.dashboard.send(Command::RefreshPhoto);
     info!("Photo refresh requested by the control panel");
     Ok(Json(json!({ "ok": true })))
 }
@@ -330,13 +271,12 @@ fn create_router(state: AppState, static_dir: PathBuf) -> Router {
     let api_routes = Router::new()
         .route(
             "/settings",
-            get(get_settings).put(update_settings).patch(patch_settings),
+            get(get_settings).patch(patch_settings),
         )
         .route("/settings/reset", post(reset_settings))
-        .route("/photo/current", get(get_current_photo).post(update_current_photo))
+        .route("/photo/current", get(get_current_photo))
         .route("/photo/refresh", post(refresh_photo))
         .route("/auth/check", get(auth_check))
-        .route("/fonts", get(get_fonts))
         .route("/events", get(events_stream))
         .route("/health", get(health_check));
 
@@ -366,12 +306,13 @@ pub fn get_local_ips() -> Vec<String> {
     ips
 }
 
-/// Start the HTTP server. `photos` is shared with the Tauri command layer so the
-/// dashboard and the API publish photo changes through the same channel.
+/// Start the HTTP server. `photos` is shared with the dashboard, which publishes each
+/// new photo through it.
 pub async fn start_server(
     port: u16,
     app_handle: tauri::AppHandle,
     photos: PhotoChannel,
+    dashboard: Dashboard,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // try_init, not init: init panics if a subscriber is already installed, which
     // would take down the whole app over a logging detail.
@@ -382,18 +323,11 @@ pub async fn start_server(
         )
         .try_init();
 
-    let settings_manager = SettingsManager::new()
-        .map_err(|e| format!("Failed to initialize settings manager: {}", e))?;
-
     // Mint the control token before anything can be asked to authorise against it.
     let token = settings_manager::ensure_auth_token()
         .map_err(|e| format!("Failed to prepare the control token: {}", e))?;
 
-    let state = AppState {
-        settings_manager,
-        app_handle: app_handle.clone(),
-        photos,
-    };
+    let state = AppState { dashboard, photos };
 
     let static_dir = if cfg!(debug_assertions) {
         PathBuf::from("idleview-control")
@@ -427,16 +361,15 @@ pub async fn start_server(
         .map_err(|e| format!("Server error: {}", e).into())
 }
 
-// Handler tests need a tauri::AppHandle, which cannot be mocked, so routing is
-// exercised by running the app. The pieces that hold no Tauri types - the photo
+// Handlers are exercised by running the app. The pieces that hold no Tauri types - the photo
 // channel and the token check - are tested directly here.
 #[cfg(test)]
 mod tests {
     use super::*;
     use axum::http::HeaderValue;
 
-    fn photo(url: &str) -> CurrentPhoto {
-        CurrentPhoto {
+    fn photo(url: &str) -> Photo {
+        Photo {
             url: url.to_string(),
             author: "Ansel".to_string(),
             author_url: "https://example.com/a".to_string(),

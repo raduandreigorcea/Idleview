@@ -19,7 +19,8 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+idleview-core = { path = "../core" }
+tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -29,11 +30,14 @@ urlencoding = "2.1"
 chrono = "0.4"
 dirs = "5.0"
 rand = "0.8"
+# Uploaded photos: decode, honour the phone's rotation, downscale, re-encode (which also
+# drops EXIF, GPS included). Only the formats the upload accepts.
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 # HTTP server dependencies
 axum = "0.7"
 tokio = { version = "1", features = ["full"] }
 # No "cors" feature: the API grants no cross-origin access, so the layer is dead weight.
-tower-http = { version = "0.5", features = ["fs", "trace"] }
+tower-http = { version = "0.5", features = ["fs", "trace", "set-header"] }
 tower = "0.5"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

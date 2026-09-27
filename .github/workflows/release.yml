@@ -1,81 +1,81 @@
 name: Release
 
-# Every push to main cuts a new release: the version is auto-bumped (patch) from the
-# latest v* tag, the Tauri app is built for Windows and Linux, and the installers are
-# published to a fresh GitHub Release. You can also run it by hand from the Actions tab.
+# Releases are cut by pushing a version tag:
 #
-# To push without cutting a release, put [skip release] anywhere in the commit message.
+#   git tag v1.1.0 && git push origin v1.1.0
+#
+# The tag is the version. Pushing to main no longer ships anything, so a typo fix does
+# not publish installers. You can also run this by hand from the Actions tab on a tag.
 on:
   push:
-    branches:
-      - main
+    tags:
+      - 'v*'
   workflow_dispatch:
 
-# tauri-action creates the tag + release and uploads assets to it.
 permissions:
   contents: write
 
 jobs:
-  # Work out the next version from the highest existing v* tag, so releases march forward
-  # on their own (v0.1.0 -> v0.1.1 -> ...). Nothing is committed back to the repo - the
-  # tags are the source of truth, which keeps your local main in sync without a pull.
-  version:
-    if: ${{ !contains(github.event.head_commit.message, '[skip release]') }}
-    runs-on: ubuntu-latest
-    outputs:
-      version: ${{ steps.compute.outputs.version }}
+  # Everything that runs without a GUI toolchain. A release never ships red.
+  test:
+    runs-on: ubuntu-22.04
     steps:
-      - name: Checkout (full history + tags)
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
-          fetch-tags: true
-
-      - name: Compute next version
-        id: compute
+          submodules: recursive
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Core logic (Rust)
+        run: cargo test --manifest-path core/Cargo.toml
+      - name: Dashboard, photo proxy and control panel (JS)
         run: |
-          latest=$(git tag -l 'v*' --sort=-v:refname | head -n1)
-          latest=${latest:-v0.0.0}
-          base=${latest#v}
-          IFS='.' read -r major minor patch <<< "$base"
-          next="${major}.${minor}.$((patch + 1))"
-          echo "Latest tag: ${latest} -> next: v${next}"
-          echo "version=${next}" >> "$GITHUB_OUTPUT"
+          npm ci
+          npm --prefix proxy ci
+          npm --prefix idleview-control ci
+          npm test
 
   build:
-    needs: version
+    needs: test
     strategy:
       fail-fast: false
       matrix:
         include:
-          # Windows -> .exe (NSIS) and .msi, per bundle.targets in tauri.conf.json.
+          # Windows -> .exe (NSIS) and .msi.
           - platform: windows-latest
-          # Linux -> .deb and .rpm. 22.04 keeps the glibc requirement low so the
-          # binaries run on a wide range of distros.
+            args: ''
+          # Linux x64 -> .deb and .rpm. 22.04 keeps the glibc requirement low so the
+          # packages install on a wide range of distros.
           - platform: ubuntu-22.04
+            args: ''
+          # Raspberry Pi and other ARM64 Linux (Pi OS 64-bit) -> .deb and .rpm, built
+          # natively on GitHub's ARM runners.
+          - platform: ubuntu-22.04-arm
+            args: ''
+          # macOS -> one .dmg for both Apple Silicon and Intel. Unsigned: first launch
+          # needs right-click > Open until an Apple Developer ID is set up.
+          - platform: macos-latest
+            args: '--target universal-apple-darwin'
 
     runs-on: ${{ matrix.platform }}
 
     steps:
-      # The control panel is a git submodule that gets built into the app, so it must be
-      # checked out too.
-      - name: Checkout (with submodules)
-        uses: actions/checkout@v4
+      # The control panel is a submodule that gets built into the app.
+      - uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      # Stamp the computed version into tauri.conf.json so the installers carry it. This
-      # edit lives only on the runner; it is never committed.
+      # v1.2.3 -> 1.2.3, stamped into tauri.conf.json on the runner only (never committed).
       - name: Set release version
         shell: bash
-        env:
-          V: ${{ needs.version.outputs.version }}
         run: |
-          node -e "const fs=require('fs');const f='src-tauri/tauri.conf.json';const j=JSON.parse(fs.readFileSync(f));j.version=process.env.V;fs.writeFileSync(f,JSON.stringify(j,null,2)+'\n')"
+          V="${GITHUB_REF_NAME#v}"
+          node -e "const fs=require('fs');const f='src-tauri/tauri.conf.json';const j=JSON.parse(fs.readFileSync(f));j.version=process.argv[1];fs.writeFileSync(f,JSON.stringify(j,null,2)+'\n')" "$V"
 
       # Tauri v2's Linux toolchain. `rpm` is needed for the .rpm bundle target.
       - name: Install Linux system dependencies
-        if: matrix.platform == 'ubuntu-22.04'
+        if: startsWith(matrix.platform, 'ubuntu')
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -89,34 +89,32 @@ jobs:
             build-essential \
             file
 
-      # Node is needed for beforeBuildCommand, which installs and builds the control panel.
-      - name: Set up Node
-        uses: actions/setup-node@v4
+      # Node is needed for beforeBuildCommand, which builds the control panel.
+      - uses: actions/setup-node@v4
         with:
           node-version: 22
 
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          # A universal macOS build compiles for both architectures.
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
-      # Caches the Rust build so reruns don't recompile every crate from scratch.
-      - name: Cache Rust
-        uses: swatinem/rust-cache@v2
+      - uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
 
-      # tauri-action drives the build through this repo's `npm run tauri build`, which
-      # needs @tauri-apps/cli from the root package.json. beforeBuildCommand only installs
-      # the control panel's deps, so the root deps have to be installed here.
+      # tauri-action runs this repo's `npm run tauri build`, which needs the root deps.
       - name: Install root dependencies
-        run: npm install
+        run: npm ci
 
       - name: Build and publish
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: v${{ needs.version.outputs.version }}
-          releaseName: 'Idleview v${{ needs.version.outputs.version }}'
-          releaseBody: 'Automated build. Installers are attached below.'
+          tagName: ${{ github.ref_name }}
+          releaseName: 'Idleview ${{ github.ref_name }}'
+          releaseBody: 'Installers for Windows, macOS, Linux (x64) and Raspberry Pi (ARM64) are attached below.'
           releaseDraft: false
           prerelease: false
+          args: ${{ matrix.args }}

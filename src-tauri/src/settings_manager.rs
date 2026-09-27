@@ -4,21 +4,23 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::{OnceLock, RwLock};
 
-use crate::fonts;
+use idleview_core::{Units, Visibility};
 
 /// The single in-memory source of truth for settings. Every reader and writer -
 /// Tauri commands and HTTP handlers alike - goes through this, so the two can
 /// never drift apart.
 static SETTINGS_CACHE: OnceLock<RwLock<Settings>> = OnceLock::new();
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+/// Every section defaults when missing, and unknown fields are ignored, so a settings
+/// file from an older build (fonts, photo quality, custom queries...) still loads.
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[serde(default)]
 pub struct Settings {
-    pub units: UnitsSettings,
-    pub display: DisplaySettings,
+    pub units: Units,
+    pub display: Visibility,
     pub photos: PhotosSettings,
     /// Never leaves the process over HTTP - see `redacted`. Persisted to the
     /// settings file like everything else, but stripped from every API response.
-    #[serde(default)]
     pub secrets: SecretSettings,
 }
 
@@ -28,238 +30,48 @@ pub struct SecretSettings {
     /// on first run; clients may never set it, only use it.
     ///
     /// There is deliberately no Unsplash key here. Photos come from the proxy (see
-    /// `crate::photos`), which holds the key server-side - a key on the user's machine,
-    /// whether compiled in or sitting in a settings file, is a key that has been given
-    /// away.
+    /// `crate::photos`), which holds the key server-side.
     #[serde(default)]
     pub auth_token: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct UnitsSettings {
-    pub temperature_unit: String,   // "celsius" or "fahrenheit"
-    pub time_format: String,        // "24h" or "12h"
-    pub date_format: String,        // "mdy", "dmy", "ymd"
-    pub wind_speed_unit: String,    // "kmh", "mph", "ms"
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct DisplaySettings {
-    #[serde(default = "default_show_clock")]
-    pub show_clock: bool,
-    #[serde(default = "default_show_date")]
-    pub show_date: bool,
-    #[serde(default = "default_show_weekday")]
-    pub show_weekday: bool,
-    #[serde(default = "default_show_temperature")]
-    pub show_temperature: bool,
-    #[serde(default = "default_true")]
-    pub show_humidity_wind: bool,
-    #[serde(default = "default_true")]
-    pub show_precipitation_cloudiness: bool,
-    #[serde(default = "default_true")]
-    pub show_sunrise_sunset: bool,
-    #[serde(default = "default_show_location")]
-    pub show_location: bool,
-    #[serde(default)]
-    pub show_debug: bool,
-    #[serde(default = "default_clock_font")]
-    pub clock_font: String,
-    #[serde(default = "default_clock_font_size")]
-    pub clock_font_size: u16,
-    // Weights are numbers now (100-900), not words. "thin" used to mean 200, a weight
-    // most of these families do not publish, so it was silently synthesised. The
-    // deserializer still accepts the old words from an existing settings file.
-    #[serde(default = "default_clock_font_weight", deserialize_with = "deserialize_weight")]
-    pub clock_font_weight: u16,
-    #[serde(default = "default_weekday_font")]
-    pub weekday_font: String,
-    #[serde(default = "default_weekday_font_size")]
-    pub weekday_font_size: u16,
-    #[serde(default = "default_weekday_font_weight", deserialize_with = "deserialize_weight")]
-    pub weekday_font_weight: u16,
-    #[serde(default = "default_date_font")]
-    pub date_font: String,
-    #[serde(default = "default_date_font_size")]
-    pub date_font_size: u16,
-    #[serde(default = "default_date_font_weight", deserialize_with = "deserialize_weight")]
-    pub date_font_weight: u16,
-}
-
-fn default_true() -> bool { true }
-fn default_show_location() -> bool { true }
-fn default_show_clock() -> bool { true }
-fn default_show_date() -> bool { true }
-fn default_show_weekday() -> bool { true }
-fn default_show_temperature() -> bool { true }
-
-fn default_clock_font() -> String { fonts::Role::Clock.default_font().to_string() }
-fn default_clock_font_size() -> u16 { 180 }
-fn default_clock_font_weight() -> u16 { fonts::Role::Clock.default_weight() }
-fn default_weekday_font() -> String { fonts::Role::Weekday.default_font().to_string() }
-fn default_weekday_font_size() -> u16 { 70 }
-fn default_weekday_font_weight() -> u16 { fonts::Role::Weekday.default_weight() }
-fn default_date_font() -> String { fonts::Role::Date.default_font().to_string() }
-fn default_date_font_size() -> u16 { 40 }
-fn default_date_font_weight() -> u16 { fonts::Role::Date.default_weight() }
-
-/// Accept a number, a numeric string, or one of the legacy weight words that existing
-/// settings files still hold.
-fn deserialize_weight<'de, D>(deserializer: D) -> Result<u16, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    use serde::de::{self, Visitor};
-    use std::fmt;
-
-    fn from_str(value: &str) -> u16 {
-        match value.trim().to_lowercase().as_str() {
-            "thin" => 200,
-            "light" => 300,
-            "regular" | "normal" => 400,
-            "medium" => 500,
-            "semibold" => 600,
-            "bold" => 700,
-            other => other.parse::<u16>().unwrap_or(400),
-        }
-    }
-
-    struct WeightVisitor;
-
-    impl<'de> Visitor<'de> for WeightVisitor {
-        type Value = u16;
-
-        fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-            formatter.write_str("a font weight as a number or a name")
-        }
-
-        fn visit_str<E: de::Error>(self, value: &str) -> Result<u16, E> {
-            Ok(from_str(value))
-        }
-
-        fn visit_u64<E: de::Error>(self, value: u64) -> Result<u16, E> {
-            Ok(value.min(u16::MAX as u64) as u16)
-        }
-
-        fn visit_i64<E: de::Error>(self, value: i64) -> Result<u16, E> {
-            Ok(value.clamp(0, u16::MAX as i64) as u16)
-        }
-
-        fn visit_f64<E: de::Error>(self, value: f64) -> Result<u16, E> {
-            Ok(value.round().clamp(0.0, u16::MAX as f64) as u16)
-        }
-    }
-
-    deserializer.deserialize_any(WeightVisitor)
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(default)]
 pub struct PhotosSettings {
-    #[serde(default = "default_refresh_interval")]
-    pub refresh_interval: u64,  // in minutes
-    /// A percentage, not a label. The lenient deserializer below still accepts the
-    /// numeric strings and legacy words ("high") that older settings files hold.
-    #[serde(default = "default_photo_quality", deserialize_with = "deserialize_quality")]
-    pub photo_quality: u8,
-    #[serde(default = "default_true")]
+    /// "unsplash" or "local". Local means the user's own photos only - the photo
+    /// service is never contacted.
+    pub source: String,
+    pub refresh_interval: u64, // minutes
     pub enable_festive_queries: bool,
-    #[serde(default)]
-    pub custom_query: String,  // If non-empty, replaces generated query
 }
 
-fn default_refresh_interval() -> u64 { 30 }
-fn default_photo_quality() -> u8 { 80 }
+impl Default for PhotosSettings {
+    fn default() -> Self {
+        Self { source: "unsplash".into(), refresh_interval: 30, enable_festive_queries: true }
+    }
+}
 
-// ===== Validation =====
-//
-// Every write path funnels through `validate`. Clamping here rather than in the
-// clients is what stops a hand-rolled `curl` (or a stale UI) from persisting a
-// value the rest of the app cannot cope with - a refresh_interval of 0 used to
-// mean "never cache" to Rust and "30 minutes" to JS, so the photo silently
-// refetched on every check while the debug panel counted down to a refresh that
-// had already happened.
+impl PhotosSettings {
+    pub fn local(&self) -> bool {
+        self.source == "local"
+    }
+}
 
+// Every write path funnels through `validate`, so a hand-rolled `curl` or a stale
+// panel cannot persist a value the rest of the app cannot cope with.
 pub const REFRESH_INTERVAL_MIN: u64 = 1;
 pub const REFRESH_INTERVAL_MAX: u64 = 24 * 60;
-pub const PHOTO_QUALITY_MIN: u8 = 30;
-pub const PHOTO_QUALITY_MAX: u8 = 100;
-pub const CLOCK_FONT_SIZE_MIN: u16 = 120;
-pub const CLOCK_FONT_SIZE_MAX: u16 = 260;
-pub const SECONDARY_FONT_SIZE_MIN: u16 = 40;
-pub const SECONDARY_FONT_SIZE_MAX: u16 = 200;
-pub const CUSTOM_QUERY_MAX_CHARS: usize = 120;
-
-fn clamp_choice(value: &mut String, allowed: &[&str], fallback: &str) {
-    let lowered = value.to_lowercase();
-    if allowed.contains(&lowered.as_str()) {
-        *value = lowered;
-    } else {
-        *value = fallback.to_string();
-    }
-}
 
 impl Settings {
-    /// Force every field into a range the rest of the app can actually honour.
     pub fn validate(&mut self) {
-        clamp_choice(&mut self.units.temperature_unit, &["celsius", "fahrenheit"], "celsius");
-        clamp_choice(&mut self.units.time_format, &["24h", "12h"], "24h");
-        clamp_choice(&mut self.units.date_format, &["mdy", "dmy", "ymd"], "dmy");
-        clamp_choice(&mut self.units.wind_speed_unit, &["kmh", "mph", "ms"], "kmh");
-
-        // Fonts and weights are resolved against the catalogue, so a settings file can
-        // never name a font we do not load, nor a weight the chosen font lacks.
-        let resolve = |role: fonts::Role, id: &mut String, weight: &mut u16| {
-            let font = fonts::resolve_font(role, id);
-            *id = font.id.to_string();
-            *weight = fonts::nearest_weight(font, *weight);
-        };
-
-        resolve(
-            fonts::Role::Clock,
-            &mut self.display.clock_font,
-            &mut self.display.clock_font_weight,
-        );
-        resolve(
-            fonts::Role::Weekday,
-            &mut self.display.weekday_font,
-            &mut self.display.weekday_font_weight,
-        );
-        resolve(
-            fonts::Role::Date,
-            &mut self.display.date_font,
-            &mut self.display.date_font_weight,
-        );
-
-        self.display.clock_font_size = self
-            .display
-            .clock_font_size
-            .clamp(CLOCK_FONT_SIZE_MIN, CLOCK_FONT_SIZE_MAX);
-        self.display.weekday_font_size = self
-            .display
-            .weekday_font_size
-            .clamp(SECONDARY_FONT_SIZE_MIN, SECONDARY_FONT_SIZE_MAX);
-        self.display.date_font_size = self
-            .display
-            .date_font_size
-            .clamp(SECONDARY_FONT_SIZE_MIN, SECONDARY_FONT_SIZE_MAX);
-
+        self.units.validate();
+        if !matches!(self.photos.source.as_str(), "unsplash" | "local") {
+            self.photos.source = "unsplash".into();
+        }
         self.photos.refresh_interval = self
             .photos
             .refresh_interval
             .clamp(REFRESH_INTERVAL_MIN, REFRESH_INTERVAL_MAX);
-        self.photos.photo_quality = self
-            .photos
-            .photo_quality
-            .clamp(PHOTO_QUALITY_MIN, PHOTO_QUALITY_MAX);
-
-        let trimmed: String = self
-            .photos
-            .custom_query
-            .trim()
-            .chars()
-            .take(CUSTOM_QUERY_MAX_CHARS)
-            .collect();
-        self.photos.custom_query = trimmed;
     }
 
     /// The shape the HTTP API is allowed to hand out: everything except `secrets`.
@@ -269,93 +81,6 @@ impl Settings {
             object.remove("secrets");
         }
         value
-    }
-}
-
-// Accept a number, a numeric string, or one of the legacy words that older
-// settings files on disk still contain.
-fn deserialize_quality<'de, D>(deserializer: D) -> Result<u8, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    use serde::de::{self, Visitor};
-    use std::fmt;
-
-    struct QualityVisitor;
-
-    fn from_str(value: &str) -> u8 {
-        match value.trim().to_lowercase().as_str() {
-            "low" => 65,
-            "medium" => 80,
-            "high" | "maximum" => 100,
-            other => other.parse::<u8>().unwrap_or(default_photo_quality()),
-        }
-    }
-
-    impl<'de> Visitor<'de> for QualityVisitor {
-        type Value = u8;
-
-        fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-            formatter.write_str("a quality percentage as a number or string")
-        }
-
-        fn visit_str<E: de::Error>(self, value: &str) -> Result<u8, E> {
-            Ok(from_str(value))
-        }
-
-        fn visit_u64<E: de::Error>(self, value: u64) -> Result<u8, E> {
-            Ok(value.min(u8::MAX as u64) as u8)
-        }
-
-        fn visit_i64<E: de::Error>(self, value: i64) -> Result<u8, E> {
-            Ok(value.clamp(0, u8::MAX as i64) as u8)
-        }
-
-        fn visit_f64<E: de::Error>(self, value: f64) -> Result<u8, E> {
-            Ok(value.round().clamp(0.0, u8::MAX as f64) as u8)
-        }
-    }
-
-    deserializer.deserialize_any(QualityVisitor)
-}
-
-impl Default for Settings {
-    fn default() -> Self {
-        Settings {
-            units: UnitsSettings {
-                temperature_unit: "celsius".to_string(),
-                time_format: "24h".to_string(),
-                date_format: "dmy".to_string(),
-                wind_speed_unit: "kmh".to_string(),
-            },
-            display: DisplaySettings {
-                show_clock: true,
-                show_date: true,
-                show_weekday: true,
-                show_temperature: true,
-                show_humidity_wind: true,
-                show_precipitation_cloudiness: true,
-                show_sunrise_sunset: true,
-                show_location: true,
-                show_debug: false,
-                clock_font: default_clock_font(),
-                clock_font_size: default_clock_font_size(),
-                clock_font_weight: default_clock_font_weight(),
-                weekday_font: default_weekday_font(),
-                weekday_font_size: default_weekday_font_size(),
-                weekday_font_weight: default_weekday_font_weight(),
-                date_font: default_date_font(),
-                date_font_size: default_date_font_size(),
-                date_font_weight: default_date_font_weight(),
-            },
-            photos: PhotosSettings {
-                refresh_interval: default_refresh_interval(),
-                photo_quality: default_photo_quality(),
-                enable_festive_queries: true,
-                custom_query: String::new(),
-            },
-            secrets: SecretSettings::default(),
-        }
     }
 }
 
@@ -544,33 +269,6 @@ fn read_settings_from_disk() -> Result<Settings, String> {
     }
 }
 
-/// A handle onto the shared settings. Holds no state of its own - it reads and
-/// writes the same cache the Tauri commands use, which is what keeps the HTTP
-/// API and the desktop window from disagreeing about the current settings.
-#[derive(Clone, Copy, Default)]
-pub struct SettingsManager;
-
-impl SettingsManager {
-    pub fn new() -> Result<Self, String> {
-        // Load eagerly so a broken settings path surfaces at startup, not on the
-        // first request.
-        read_settings()?;
-        Ok(Self)
-    }
-
-    pub fn get(&self) -> Result<Settings, String> {
-        read_settings()
-    }
-
-    pub fn update_all(&self, new_settings: Settings) -> Result<Settings, String> {
-        write_settings(&new_settings)
-    }
-
-    pub fn update_partial(&self, updates: serde_json::Value) -> Result<Settings, String> {
-        update_settings_partial(updates)
-    }
-}
-
 /// Merge JSON values recursively
 fn merge_json(target: &mut serde_json::Value, source: serde_json::Value) {
     if let (Some(target_obj), Some(source_obj)) = (target.as_object_mut(), source.as_object()) {
@@ -593,19 +291,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_default_settings() {
-        let settings = Settings::default();
-        assert!(settings.display.show_clock);
-        assert!(settings.display.show_date);
-        assert!(settings.display.show_weekday);
-        assert!(settings.display.show_temperature);
-        assert_eq!(settings.units.temperature_unit, "celsius");
-        assert_eq!(settings.photos.refresh_interval, 30);
-        assert_eq!(settings.photos.photo_quality, 80);
-        assert!(settings.photos.custom_query.is_empty());
-    }
-
-    #[test]
     fn test_merge_json() {
         let mut target = serde_json::json!({ "a": 1, "b": { "c": 2, "d": 3 } });
         let source = serde_json::json!({ "b": { "c": 5 }, "e": 10 });
@@ -619,105 +304,56 @@ mod tests {
     }
 
     #[test]
-    fn a_zero_refresh_interval_is_clamped_rather_than_meaning_never_cache() {
-        // The bug this guards: 0 made is_cache_valid always false (refetch on every
-        // check) while the JS side read 0 as "fall back to 30 minutes".
-        let mut settings = Settings::default();
-        settings.photos.refresh_interval = 0;
-        settings.validate();
-        assert_eq!(settings.photos.refresh_interval, REFRESH_INTERVAL_MIN);
+    fn a_settings_file_from_the_customisation_era_still_loads() {
+        // Written by a build that had fonts, photo quality and custom queries.
+        let old = r#"{
+            "units": { "temperature_unit": "fahrenheit", "time_format": "12h",
+                       "date_format": "mdy", "wind_speed_unit": "mph" },
+            "display": { "show_clock": true, "show_location": false, "show_debug": true,
+                         "clock_font": "sacramento", "clock_font_weight": "thin" },
+            "photos": { "refresh_interval": 60, "photo_quality": "high",
+                        "enable_festive_queries": false, "custom_query": "misty forest" },
+            "secrets": { "auth_token": "K7PMX2QD" }
+        }"#;
+        let settings: Settings = serde_json::from_str(old).unwrap();
+
+        assert_eq!(settings.units.temperature_unit, "fahrenheit");
+        assert!(!settings.display.show_location);
+        assert!(settings.display.show_weekday, "missing toggles default to shown");
+        assert_eq!(settings.photos.refresh_interval, 60);
+        assert!(!settings.photos.enable_festive_queries);
+        assert_eq!(settings.secrets.auth_token, "K7PMX2QD");
+
+        // And the retired fields are gone on the next write.
+        let rewritten = serde_json::to_string(&settings).unwrap();
+        assert!(!rewritten.contains("custom_query") && !rewritten.contains("clock_font"));
     }
 
     #[test]
-    fn out_of_range_values_are_clamped() {
-        let mut settings = Settings::default();
-        settings.photos.photo_quality = 200;
-        settings.display.clock_font_size = 4000;
-        settings.display.weekday_font_size = 1;
-        settings.photos.refresh_interval = 999_999;
-        settings.validate();
-
-        assert_eq!(settings.photos.photo_quality, PHOTO_QUALITY_MAX);
-        assert_eq!(settings.display.clock_font_size, CLOCK_FONT_SIZE_MAX);
-        assert_eq!(settings.display.weekday_font_size, SECONDARY_FONT_SIZE_MIN);
-        assert_eq!(settings.photos.refresh_interval, REFRESH_INTERVAL_MAX);
-    }
-
-    #[test]
-    fn unknown_enum_values_fall_back_to_defaults() {
-        let mut settings = Settings::default();
-        settings.units.temperature_unit = "kelvin".to_string();
-        settings.units.time_format = "36h".to_string();
-        settings.validate();
-
-        assert_eq!(settings.units.temperature_unit, "celsius");
+    fn a_partial_file_fills_in_defaults() {
+        let settings: Settings = serde_json::from_str(r#"{ "photos": {} }"#).unwrap();
+        assert_eq!(settings.photos.refresh_interval, 30);
         assert_eq!(settings.units.time_format, "24h");
     }
 
     #[test]
-    fn a_font_we_do_not_load_cannot_be_persisted() {
+    fn a_zero_refresh_interval_is_clamped_rather_than_meaning_never_cache() {
         let mut settings = Settings::default();
-        // google_sans was offered by both UIs and is not on Google Fonts at all.
-        settings.display.clock_font = "google_sans".to_string();
-        // A script face is not a legal clock font.
-        settings.display.weekday_font = "roboto".to_string();
+        settings.photos.refresh_interval = 0;
         settings.validate();
+        assert_eq!(settings.photos.refresh_interval, REFRESH_INTERVAL_MIN);
 
-        assert_eq!(settings.display.clock_font, "roboto");
-        assert_eq!(settings.display.weekday_font, "great_vibes");
+        settings.photos.refresh_interval = 999_999;
+        settings.validate();
+        assert_eq!(settings.photos.refresh_interval, REFRESH_INTERVAL_MAX);
     }
 
     #[test]
-    fn a_weight_the_font_lacks_is_snapped_to_one_it_has() {
+    fn an_unknown_photo_source_falls_back_to_unsplash() {
         let mut settings = Settings::default();
-        settings.display.clock_font = "arimo".to_string();
-        settings.display.clock_font_weight = 200; // Arimo has nothing below 400.
+        settings.photos.source = "ftp".into();
         settings.validate();
-
-        assert_eq!(settings.display.clock_font_weight, 400);
-    }
-
-    #[test]
-    fn legacy_weight_words_still_parse() {
-        let parse = |raw: &str| -> u16 {
-            let json = format!(
-                r#"{{"show_humidity_wind":true,"show_precipitation_cloudiness":true,
-                     "show_sunrise_sunset":true,"clock_font_weight":{}}}"#,
-                raw
-            );
-            serde_json::from_str::<DisplaySettings>(&json).unwrap().clock_font_weight
-        };
-
-        assert_eq!(parse(r#""thin""#), 200);
-        assert_eq!(parse(r#""regular""#), 400);
-        assert_eq!(parse(r#""medium""#), 500);
-        assert_eq!(parse(r#""bold""#), 700);
-        assert_eq!(parse("600"), 600);   // the shape the panel now sends
-        assert_eq!(parse(r#""600""#), 600);
-    }
-
-    #[test]
-    fn custom_query_is_trimmed_and_bounded() {
-        let mut settings = Settings::default();
-        settings.photos.custom_query = format!("  {}  ", "a".repeat(500));
-        settings.validate();
-        assert_eq!(settings.photos.custom_query.chars().count(), CUSTOM_QUERY_MAX_CHARS);
-    }
-
-    #[test]
-    fn quality_accepts_numbers_numeric_strings_and_legacy_words() {
-        let parse = |raw: &str| -> u8 {
-            let json = format!(
-                r#"{{"refresh_interval":30,"photo_quality":{},"enable_festive_queries":true,"custom_query":""}}"#,
-                raw
-            );
-            serde_json::from_str::<PhotosSettings>(&json).unwrap().photo_quality
-        };
-
-        assert_eq!(parse("95"), 95);        // number, the shape the panel now sends
-        assert_eq!(parse(r#""95""#), 95);   // numeric string, what older files hold
-        assert_eq!(parse(r#""high""#), 100); // legacy word
-        assert_eq!(parse(r#""low""#), 65);
+        assert_eq!(settings.photos.source, "unsplash");
     }
 
     #[test]
@@ -726,23 +362,8 @@ mod tests {
         settings.secrets.auth_token = "TOKEN123".to_string();
 
         let redacted = settings.redacted();
-        let serialized = serde_json::to_string(&redacted).unwrap();
-
-        assert!(!serialized.contains("TOKEN123"));
+        assert!(!serde_json::to_string(&redacted).unwrap().contains("TOKEN123"));
         assert!(redacted.get("secrets").is_none());
-    }
-
-    #[test]
-    fn the_settings_hold_no_unsplash_key_at_all() {
-        // Photos come from the proxy, which holds the key server-side. A key stored on
-        // the user's machine - compiled in OR in this file - is a key handed away, so
-        // there is deliberately nowhere here to put one.
-        let mut settings = Settings::default();
-        settings.secrets.auth_token = "TOKEN".to_string();
-        let stored = serde_json::to_string(&settings).unwrap();
-
-        assert!(!stored.contains("unsplash_access_key"));
-        assert!(!stored.contains("access_key"));
     }
 
     #[test]
@@ -750,12 +371,10 @@ mod tests {
         let mut existing = Settings::default();
         existing.secrets.auth_token = "REALTOKEN".to_string();
 
-        // A client may use the token, never change it.
         let mut incoming = Settings::default();
         incoming.secrets.auth_token = "ATTACKER".to_string();
 
         preserve_secrets(&mut incoming, &existing);
-
         assert_eq!(incoming.secrets.auth_token, "REALTOKEN");
     }
 
@@ -764,7 +383,6 @@ mod tests {
         let token = generate_token();
         assert_eq!(token.len(), TOKEN_LENGTH);
         assert!(token.bytes().all(|b| TOKEN_ALPHABET.contains(&b)));
-        // Ambiguous glyphs would get mistyped off a screen.
         assert!(!token.contains('0') && !token.contains('O'));
         assert_ne!(generate_token(), generate_token());
     }

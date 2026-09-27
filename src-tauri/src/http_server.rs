@@ -1,25 +1,28 @@
 use axum::{
-    extract::State,
-    http::{HeaderMap, StatusCode},
+    body::Bytes,
+    extract::{DefaultBodyLimit, Path, State},
+    http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response, sse::{Event, KeepAlive, Sse}},
     routing::{get, post},
     Json, Router,
 };
-use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::convert::Infallible;
-use tauri::{Emitter, Manager};
+use tauri::Manager;
 use tower::ServiceBuilder;
-use tower_http::{services::ServeDir, trace::TraceLayer};
+use tower_http::{services::ServeDir, set_header::SetResponseHeaderLayer, trace::TraceLayer};
 use tracing::{info, error};
 use tokio::sync::broadcast;
 use futures::stream::Stream;
 use async_stream::stream;
 
-use crate::settings_manager::{self, Settings, SettingsManager};
+use crate::dashboard::Dashboard;
+use crate::library::{self, AddError};
+use crate::settings_manager::{self, Settings};
+use idleview_core::Photo;
 
 /// Header carrying the shared token that authorises a write.
 const TOKEN_HEADER: &str = "x-idleview-token";
@@ -27,20 +30,12 @@ const TOKEN_HEADER: &str = "x-idleview-token";
 /// resulting broadcast as its own echo and skip reloading.
 const CLIENT_HEADER: &str = "x-idleview-client";
 
-/// Current photo information
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CurrentPhoto {
-    pub url: String,
-    pub author: String,
-    pub author_url: String,
-}
-
 /// The currently displayed photo plus the SSE fan-out channel. Shared between the
 /// HTTP handlers and the Tauri command the dashboard calls, so both publish photo
 /// changes the same way.
 #[derive(Clone)]
 pub struct PhotoChannel {
-    current: Arc<Mutex<Option<CurrentPhoto>>>,
+    current: Arc<Mutex<Option<Photo>>>,
     events: broadcast::Sender<String>,
 }
 
@@ -53,14 +48,14 @@ impl PhotoChannel {
         }
     }
 
-    pub fn get(&self) -> Result<Option<CurrentPhoto>, String> {
+    pub fn get(&self) -> Result<Option<Photo>, String> {
         self.current
             .lock()
             .map(|photo| photo.clone())
             .map_err(|e| format!("Failed to lock photo state: {}", e))
     }
 
-    pub fn set(&self, photo: CurrentPhoto) -> Result<(), String> {
+    pub fn set(&self, photo: Photo) -> Result<(), String> {
         {
             let mut current = self
                 .current
@@ -71,6 +66,14 @@ impl PhotoChannel {
         info!("Current photo updated: {} by {}", photo.url, photo.author);
         self.broadcast(&json!({ "type": "photo-updated", "photo": photo }));
         Ok(())
+    }
+
+    /// Nothing is showing (the user's own library is empty).
+    pub fn clear(&self) {
+        if let Ok(mut current) = self.current.lock() {
+            *current = None;
+        }
+        self.broadcast(&json!({ "type": "photo-updated", "photo": null }));
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<String> {
@@ -93,8 +96,7 @@ impl Default for PhotoChannel {
 /// Application state shared across handlers
 #[derive(Clone)]
 pub struct AppState {
-    pub settings_manager: SettingsManager,
-    pub app_handle: tauri::AppHandle,
+    pub dashboard: Dashboard,
     pub photos: PhotoChannel,
 }
 
@@ -108,6 +110,10 @@ pub struct AppError {
 impl AppError {
     fn internal(message: impl Into<String>) -> Self {
         Self { status: StatusCode::INTERNAL_SERVER_ERROR, message: message.into() }
+    }
+
+    fn new(status: StatusCode, message: impl Into<String>) -> Self {
+        Self { status, message: message.into() }
     }
 
     fn unauthorized() -> Self {
@@ -163,49 +169,28 @@ fn client_id(headers: &HeaderMap) -> Option<String> {
         .map(|value| value.to_string())
 }
 
-/// Announce a settings change to everyone listening: the Tauri window via its event
-/// channel, and any browser control panels via SSE. Every mutating handler must call
+/// Announce a settings change to everyone listening: the dashboard, which re-renders,
+/// and any browser control panels via SSE. Every mutating handler must call
 /// it - a handler that skips it leaves other open panels stale.
 ///
 /// The payload is the redacted view. Secrets must never reach an SSE subscriber.
 fn notify_settings_changed(state: &AppState, settings: &Settings, origin: Option<String>) {
-    let redacted = settings.redacted();
-    let _ = state.app_handle.emit("settings-updated", &redacted);
+    state.dashboard.wake();
     state.photos.broadcast(&json!({
         "type": "settings-updated",
-        "settings": redacted,
+        "settings": settings.redacted(),
         "origin": origin,
     }));
 }
 
 /// GET /api/settings - current settings, minus anything secret
-async fn get_settings(State(state): State<AppState>) -> Result<Json<serde_json::Value>, AppError> {
-    state
-        .settings_manager
-        .get()
+async fn get_settings() -> Result<Json<serde_json::Value>, AppError> {
+    settings_manager::read_settings()
         .map(|settings| Json(settings.redacted()))
         .map_err(|e| {
             error!("Failed to get settings: {}", e);
             AppError::internal(e)
         })
-}
-
-/// PUT /api/settings - replace all settings with the JSON body
-async fn update_settings(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(new_settings): Json<Settings>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    authorize(&headers)?;
-
-    let saved = state.settings_manager.update_all(new_settings).map_err(|e| {
-        error!("Failed to replace settings: {}", e);
-        AppError::internal(e)
-    })?;
-
-    info!("Settings replaced successfully");
-    notify_settings_changed(&state, &saved, client_id(&headers));
-    Ok(Json(saved.redacted()))
 }
 
 /// PATCH /api/settings - merge a partial JSON body into the current settings
@@ -216,7 +201,7 @@ async fn patch_settings(
 ) -> Result<Json<serde_json::Value>, AppError> {
     authorize(&headers)?;
 
-    let saved = state.settings_manager.update_partial(updates).map_err(|e| {
+    let saved = settings_manager::update_settings_partial(updates).map_err(|e| {
         error!("Failed to partially update settings: {}", e);
         AppError::internal(e)
     })?;
@@ -233,9 +218,7 @@ async fn reset_settings(
 ) -> Result<Json<serde_json::Value>, AppError> {
     authorize(&headers)?;
 
-    let saved = state
-        .settings_manager
-        .update_all(Settings::default())
+    let saved = settings_manager::write_settings(&Settings::default())
         .map_err(|e| {
             error!("Failed to reset settings: {}", e);
             AppError::internal(e)
@@ -253,14 +236,6 @@ async fn auth_check(headers: HeaderMap) -> Result<Json<serde_json::Value>, AppEr
     Ok(Json(json!({ "ok": true })))
 }
 
-/// GET /api/fonts - the font catalogue the picker is built from.
-///
-/// Open, like the other reads. Serving it means the panel cannot offer a font the
-/// dashboard will not render, which is what the hand-copied lists kept getting wrong.
-async fn get_fonts() -> Json<crate::fonts::FontCatalogue> {
-    Json(crate::fonts::catalogue())
-}
-
 /// Health check endpoint
 async fn health_check() -> Json<serde_json::Value> {
     Json(json!({ "status": "healthy", "service": "idleview-api" }))
@@ -269,39 +244,97 @@ async fn health_check() -> Json<serde_json::Value> {
 /// GET /api/photo/current - what the screen is showing right now
 async fn get_current_photo(
     State(state): State<AppState>,
-) -> Result<Json<Option<CurrentPhoto>>, AppError> {
+) -> Result<Json<Option<Photo>>, AppError> {
     state.photos.get().map(Json).map_err(AppError::internal)
 }
 
-/// POST /api/photo/current - publish a photo
-async fn update_current_photo(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(photo): Json<CurrentPhoto>,
-) -> Result<Json<CurrentPhoto>, AppError> {
+// ===== The user's own photos =====
+//
+// Unlike settings, even reading these needs the token: they are personal photos, and the
+// screen only ever shows one at a time.
+
+/// GET /api/photos - ids of the photos in the library
+async fn list_photos(headers: HeaderMap) -> Result<Json<Vec<String>>, AppError> {
     authorize(&headers)?;
-    state.photos.set(photo.clone()).map_err(AppError::internal)?;
-    Ok(Json(photo))
+    Ok(Json(library::list()))
 }
 
-/// POST /api/photo/refresh - ask the dashboard for a new photo now.
+/// GET /api/photos/:id/thumb - a small JPEG for the panel's grid
+async fn photo_thumb(headers: HeaderMap, Path(id): Path<String>) -> Result<Response, AppError> {
+    authorize(&headers)?;
+    let path = library::thumb_path(&id).ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "No such photo"))?;
+    let bytes = tokio::fs::read(path)
+        .await
+        .map_err(|_| AppError::new(StatusCode::NOT_FOUND, "No such photo"))?;
+    Ok((
+        [(header::CONTENT_TYPE, "image/jpeg"), (header::CACHE_CONTROL, "private, max-age=86400")],
+        bytes,
+    )
+        .into_response())
+}
+
+/// POST /api/photos - body is one image file (JPEG, PNG or WebP)
+async fn upload_photo(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<serde_json::Value>, AppError> {
+    authorize(&headers)?;
+
+    // Decoding and resizing a 12 MP photo is CPU work; keep it off the async threads.
+    let id = tokio::task::spawn_blocking(move || library::add(&body))
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?
+        .map_err(|e| match e {
+            AddError::NotAnImage => AppError::new(StatusCode::BAD_REQUEST, "That file is not a JPEG, PNG or WebP image"),
+            AddError::Full => AppError::new(
+                StatusCode::CONFLICT,
+                format!("The library is full ({} photos). Remove some first.", library::MAX_PHOTOS),
+            ),
+            AddError::Storage(e) => AppError::internal(e),
+        })?;
+
+    info!("Photo added to the library");
+    photos_changed(&state);
+    Ok(Json(json!({ "id": id })))
+}
+
+/// DELETE /api/photos/:id
+async fn delete_photo(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    authorize(&headers)?;
+    if !library::remove(&id).map_err(AppError::internal)? {
+        return Err(AppError::new(StatusCode::NOT_FOUND, "No such photo"));
+    }
+    photos_changed(&state);
+    Ok(Json(json!({ "ok": true })))
+}
+
+/// POST /api/photos/next - show another of the user's own photos now.
 ///
-/// The dashboard has always listened for `refresh-photo` (and implemented
-/// window.refreshPhoto), but nothing ever emitted the event, so the capability was
-/// unreachable from the control panel. This is the missing half.
-async fn refresh_photo(
+/// Only in "My photos" mode, where it is a local file swap. There is deliberately no
+/// equivalent for Unsplash: that would let a client spend the photo quota on demand.
+async fn next_photo(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, AppError> {
     authorize(&headers)?;
-
-    state
-        .app_handle
-        .emit("refresh-photo", ())
-        .map_err(|e| AppError::internal(format!("Failed to request a refresh: {}", e)))?;
-
-    info!("Photo refresh requested by the control panel");
+    let settings = settings_manager::read_settings().map_err(AppError::internal)?;
+    if !settings.photos.local() {
+        return Err(AppError::new(StatusCode::CONFLICT, "Next photo only works with My photos"));
+    }
+    state.dashboard.next_photo();
     Ok(Json(json!({ "ok": true })))
+}
+
+/// The screen re-checks its photo (a deleted one must go), and other open panels
+/// refresh their grid.
+fn photos_changed(state: &AppState) {
+    state.dashboard.wake();
+    state.photos.broadcast(&json!({ "type": "photos-updated" }));
 }
 
 /// GET /api/events - Server-Sent Events stream for real-time updates
@@ -330,13 +363,20 @@ fn create_router(state: AppState, static_dir: PathBuf) -> Router {
     let api_routes = Router::new()
         .route(
             "/settings",
-            get(get_settings).put(update_settings).patch(patch_settings),
+            get(get_settings).patch(patch_settings),
         )
         .route("/settings/reset", post(reset_settings))
-        .route("/photo/current", get(get_current_photo).post(update_current_photo))
-        .route("/photo/refresh", post(refresh_photo))
+        .route("/photo/current", get(get_current_photo))
+        .route(
+            "/photos",
+            get(list_photos)
+                .post(upload_photo)
+                .layer(DefaultBodyLimit::max(library::MAX_UPLOAD_BYTES)),
+        )
+        .route("/photos/next", post(next_photo))
+        .route("/photos/:id", axum::routing::delete(delete_photo))
+        .route("/photos/:id/thumb", get(photo_thumb))
         .route("/auth/check", get(auth_check))
-        .route("/fonts", get(get_fonts))
         .route("/events", get(events_stream))
         .route("/health", get(health_check));
 
@@ -350,7 +390,18 @@ fn create_router(state: AppState, static_dir: PathBuf) -> Router {
     // gated by `authorize` instead.
     Router::new()
         .nest("/api", api_routes)
-        .nest_service("/", ServeDir::new(static_dir))
+        // no-cache: the browser must check back before reusing the panel, or a phone
+        // keeps running the old one after an app update. (Unchanged files still come
+        // back as a cheap 304.)
+        .nest_service(
+            "/",
+            ServiceBuilder::new()
+                .layer(SetResponseHeaderLayer::overriding(
+                    axum::http::header::CACHE_CONTROL,
+                    axum::http::HeaderValue::from_static("no-cache"),
+                ))
+                .service(ServeDir::new(static_dir)),
+        )
         .layer(ServiceBuilder::new().layer(TraceLayer::new_for_http()))
         .with_state(state)
 }
@@ -366,12 +417,13 @@ pub fn get_local_ips() -> Vec<String> {
     ips
 }
 
-/// Start the HTTP server. `photos` is shared with the Tauri command layer so the
-/// dashboard and the API publish photo changes through the same channel.
+/// Start the HTTP server. `photos` is shared with the dashboard, which publishes each
+/// new photo through it.
 pub async fn start_server(
     port: u16,
     app_handle: tauri::AppHandle,
     photos: PhotoChannel,
+    dashboard: Dashboard,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // try_init, not init: init panics if a subscriber is already installed, which
     // would take down the whole app over a logging detail.
@@ -382,18 +434,11 @@ pub async fn start_server(
         )
         .try_init();
 
-    let settings_manager = SettingsManager::new()
-        .map_err(|e| format!("Failed to initialize settings manager: {}", e))?;
-
     // Mint the control token before anything can be asked to authorise against it.
     let token = settings_manager::ensure_auth_token()
         .map_err(|e| format!("Failed to prepare the control token: {}", e))?;
 
-    let state = AppState {
-        settings_manager,
-        app_handle: app_handle.clone(),
-        photos,
-    };
+    let state = AppState { dashboard, photos };
 
     let static_dir = if cfg!(debug_assertions) {
         PathBuf::from("idleview-control")
@@ -427,16 +472,15 @@ pub async fn start_server(
         .map_err(|e| format!("Server error: {}", e).into())
 }
 
-// Handler tests need a tauri::AppHandle, which cannot be mocked, so routing is
-// exercised by running the app. The pieces that hold no Tauri types - the photo
+// Handlers are exercised by running the app. The pieces that hold no Tauri types - the photo
 // channel and the token check - are tested directly here.
 #[cfg(test)]
 mod tests {
     use super::*;
     use axum::http::HeaderValue;
 
-    fn photo(url: &str) -> CurrentPhoto {
-        CurrentPhoto {
+    fn photo(url: &str) -> Photo {
+        Photo {
             url: url.to_string(),
             author: "Ansel".to_string(),
             author_url: "https://example.com/a".to_string(),

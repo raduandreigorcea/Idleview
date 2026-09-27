@@ -4,7 +4,7 @@
   <meta charset="utf-8"/>
   <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
   <title>Idleview</title>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Sora:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600&family=Unbounded:wght@400;500;600&display=swap" rel="stylesheet"/>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Space+Grotesk:wght@400;500;600&family=Unbounded:wght@400;500;600&display=swap" rel="stylesheet"/>
   <link rel="stylesheet" href="styles.css" />
   <script type="module" src="/main.js" defer></script>
 </head>
@@ -20,14 +20,14 @@
     <div class="top-utility">
       <div class="location-badge">
         <img src="assets/map-pin.svg" alt="Location" class="location-icon">
-        <span class="location-text" id="location">Loading...</span>
+        <span class="location-text" id="location">Locating…</span>
       </div>
     </div>
 
     <!-- Center Clock and Date -->
     <div class="center-content">
-      <h1 class="clock-display" id="time">--:--</h1>
-      <h2 class="date-display" id="date">...</h2>
+      <h1 class="clock-display" id="time"><span id="time-value">--:--</span><span class="time-period" id="time-period" hidden></span></h1>
+      <h2 class="date-display" id="date"><span id="weekday"></span><span id="date-value"></span></h2>
     </div>
 
     <!-- Bottom Weather Status Bar -->
@@ -80,6 +80,6 @@
     </div>
   </div>
 
-  <div id="debug"></div>
+  <div id="photo-credit" class="hidden"></div>
 </body>
 </html>

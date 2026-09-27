@@ -3,8 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Cloudflare Worker that holds the Unsplash key so the desktop app never ships it",
+  "description": "Cloudflare Worker that holds the Unsplash key and serves the web version of the screen",
   "scripts": {
+    "build:core": "cargo build --manifest-path ../core/Cargo.toml --target wasm32-unknown-unknown --release && node -e \"require('fs').copyFileSync('../core/target/wasm32-unknown-unknown/release/idleview_core.wasm', 'src/idleview_core.wasm')\"",
+    "pretest": "npm run build:core",
     "test": "vitest run",
     "deploy": "wrangler deploy",
     "dev": "wrangler dev"

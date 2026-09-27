@@ -40,6 +40,7 @@ describe('download location allowlist', () => {
 })
 
 import worker from './worker.js'
+import QUERIES from './queries.json'
 
 // Stand-ins for the Workers runtime: the edge cache and waitUntil.
 function runtime() {
@@ -121,5 +122,115 @@ describe('photo endpoint', () => {
     const res = await worker.fetch(photoRequest('summer'), limited, ctx)
     expect(res.status).toBe(429)
     expect(calls).toHaveLength(0)
+  })
+})
+
+import { handleView, localTime, unitsFor, sizedPhotoUrl } from './worker.js'
+
+describe('web view', () => {
+  // Unsplash and Open-Meteo, as the Worker sees them.
+  function servicesStub() {
+    const calls = []
+    globalThis.fetch = async (url) => {
+      calls.push(url)
+      if (url.includes('api.open-meteo.com')) {
+        return new Response(JSON.stringify({
+          current: {
+            temperature_2m: 18.2, relative_humidity_2m: 50, rain: 0, showers: 0, snowfall: 0,
+            cloudcover: 0, wind_speed_10m: 12.3, weathercode: 0
+          },
+          daily: { sunrise: ['2026-04-26T06:13'], sunset: ['2026-04-26T20:12'] }
+        }))
+      }
+      const photos = Array.from({ length: 10 }, (_, i) => ({
+        urls: { regular: `https://images.unsplash.com/photo-${i}?ixid=ABC&w=1080&q=75&fit=max` },
+        user: { name: `Author ${i}`, links: { html: 'https://unsplash.com/@a' } },
+        links: { download_location: `https://api.unsplash.com/photos/p${i}/download` }
+      }))
+      return new Response(JSON.stringify(photos))
+    }
+    return calls
+  }
+
+  const bucharest = { city: 'Bucharest', country: 'RO', latitude: '44.43', longitude: '26.10', timezone: 'Europe/Bucharest' }
+  const request = (query = '?w=1280&h=800') => new Request(`https://idleview.test/api/view${query}`)
+
+  it('builds the screen for the visitor, from the Rust core', async () => {
+    const { ctx } = runtime()
+    servicesStub()
+
+    const res = await handleView(request(), env, ctx, bucharest)
+    expect(res.status).toBe(200)
+    const { view, download_location } = await res.json()
+
+    expect(view.location).toBe('Bucharest')
+    expect(view.time).toMatch(/^\d{2}:\d{2}$/) // 24h outside the US
+    expect(view.weather).toMatchObject({ temperature: '18 °C', sunrise: '06:13', sunset: '20:12', wind: '12 km/h' })
+    expect(view.show.show_clock).toBe(true)
+    expect(view.photo.author).toMatch(/^Author \d$/)
+    expect(view.photo.url).toContain('w=1280')
+    expect(download_location).toMatch(/^https:\/\/api\.unsplash\.com\/photos\/p\d\/download$/)
+  })
+
+  it('asks Unsplash only for a search the app itself could make', async () => {
+    const { ctx } = runtime()
+    const calls = servicesStub()
+
+    await handleView(request(), env, ctx, bucharest)
+    const search = new URL(calls.find(url => url.includes('api.unsplash.com'))).searchParams.get('query')
+    expect(QUERIES).toContain(search)
+  })
+
+  it('shows every visitor the same photo, and fetches weather once per area', async () => {
+    const { ctx, settle } = runtime()
+    const calls = servicesStub()
+
+    const first = await (await handleView(request(), env, ctx, bucharest)).json()
+    await settle()
+    const nearby = { ...bucharest, latitude: '44.41', longitude: '26.12' } // same 0.1° square
+    const second = await (await handleView(request(), env, ctx, nearby)).json()
+
+    expect(second.view.photo.author).toBe(first.view.photo.author)
+    expect(calls.filter(url => url.includes('open-meteo'))).toHaveLength(1)
+    expect(calls.filter(url => url.includes('unsplash'))).toHaveLength(1)
+  })
+
+  it('still shows the clock when location and weather are unknown', async () => {
+    const { ctx } = runtime()
+    globalThis.fetch = async () => new Response('down', { status: 500 })
+
+    const { view } = await (await handleView(request(''), env, ctx, {})).json()
+    expect(view.time).toMatch(/^\d{2}:\d{2}$/)
+    expect(view.weather).toBeNull()
+    expect(view.location).toBeNull()
+    expect(view.photo).toBeNull()
+  })
+
+  it('uses US units for US visitors only', async () => {
+    expect(unitsFor('US')).toMatchObject({ temperature_unit: 'fahrenheit', time_format: '12h' })
+    expect(unitsFor('RO')).toEqual({})
+
+    const { ctx } = runtime()
+    servicesStub()
+    const nyc = { city: 'New York', country: 'US', latitude: '40.7', longitude: '-74.0', timezone: 'America/New_York' }
+    const { view } = await (await handleView(request(), env, ctx, nyc)).json()
+    expect(view.weather.temperature).toBe('65 °F')
+    expect(view.period).toMatch(/^(AM|PM)$/)
+  })
+
+  it('computes the visitor\'s wall-clock time', () => {
+    const instant = new Date('2026-04-26T07:42:05Z')
+    expect(localTime(instant, 'Europe/Bucharest')).toBe('2026-04-26T10:42:05')
+    expect(localTime(instant, 'America/New_York')).toBe('2026-04-26T03:42:05')
+    expect(localTime(new Date('2026-04-26T00:30:00Z'), 'UTC')).toBe('2026-04-26T00:30:00')
+  })
+
+  it('sizes photos for the screen, within bounds', () => {
+    const url = new URL(sizedPhotoUrl('https://images.unsplash.com/photo-1?ixid=ABC&w=1080&q=75&fit=max', '99999', 'junk'))
+    expect(url.searchParams.get('ixid')).toBe('ABC')
+    expect(url.searchParams.get('w')).toBe('3840')
+    expect(url.searchParams.get('h')).toBe('1080')
+    expect(url.searchParams.getAll('q')).toEqual(['80'])
+    expect(url.searchParams.get('fit')).toBe('crop')
   })
 })

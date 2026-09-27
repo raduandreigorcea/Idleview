@@ -27,6 +27,9 @@ jobs:
         with:
           node-version: 22
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          # The photo Worker runs idleview-core as WebAssembly; its tests build it.
+          targets: wasm32-unknown-unknown
       - name: Core logic (Rust)
         run: cargo test --manifest-path core/Cargo.toml
       - name: Dashboard, photo proxy and control panel (JS)

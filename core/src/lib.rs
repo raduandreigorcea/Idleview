@@ -5,6 +5,9 @@
 //! screen (the photo Worker runs in UTC) pass in the screen's local time.
 
 use chrono::{Datelike, Duration, NaiveDateTime, Timelike};
+
+#[cfg(target_arch = "wasm32")]
+mod wasm;
 use serde::{Deserialize, Serialize};
 
 // ===== Inputs =====

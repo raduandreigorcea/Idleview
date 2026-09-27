@@ -5,6 +5,7 @@
 //! the proxy, or from the user's own library), and a clock tick on each minute. Whenever the result would look different it emits a finished
 //! `idleview_core::View` as the `view` event. The webview only places text.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -32,12 +33,20 @@ const UNSPLASH_MIN_GAP: Duration = Duration::from_secs(5 * 60);
 pub struct Dashboard {
     wake: Arc<Notify>,
     latest: Arc<Mutex<Option<View>>>,
+    next_photo: Arc<AtomicBool>,
 }
 
 impl Dashboard {
     /// Something changed (settings, the photo library): re-check and redraw now.
     pub fn wake(&self) {
         self.wake.notify_one();
+    }
+
+    /// Skip to another of the user's own photos. Ignored unless the source is "My
+    /// photos", where it costs nothing: it never reaches the network.
+    pub fn next_photo(&self) {
+        self.next_photo.store(true, Ordering::Relaxed);
+        self.wake();
     }
 
     /// The last view emitted, for a webview that loads after the first emit.
@@ -49,8 +58,9 @@ impl Dashboard {
 pub fn start(app: AppHandle, photo_channel: PhotoChannel) -> Dashboard {
     let wake = Arc::new(Notify::new());
     let latest = Arc::new(Mutex::new(None));
-    tauri::async_runtime::spawn(run(app, photo_channel, wake.clone(), latest.clone()));
-    Dashboard { wake, latest }
+    let next_photo = Arc::new(AtomicBool::new(false));
+    tauri::async_runtime::spawn(run(app, photo_channel, wake.clone(), latest.clone(), next_photo.clone()));
+    Dashboard { wake, latest, next_photo }
 }
 
 struct Location {
@@ -59,9 +69,9 @@ struct Location {
     label: String,
 }
 
-/// The shown photo, persisted so a restart shows it immediately instead of a blank
+/// A photo on screen, persisted so a restart shows it immediately instead of a blank
 /// screen while the network comes up.
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 struct CachedPhoto {
     photo: Photo,
     query: String,
@@ -72,18 +82,34 @@ struct CachedPhoto {
     local_id: Option<String>,
 }
 
+/// The photo each source is showing. Switching source goes back to that source's photo
+/// rather than getting a new one; each changes only on its own schedule (or "Next").
+#[derive(Serialize, Deserialize, Default)]
+struct Shown {
+    #[serde(default)]
+    unsplash: Option<CachedPhoto>,
+    #[serde(default)]
+    local: Option<CachedPhoto>,
+}
+
+impl Shown {
+    fn get(&self, local: bool) -> Option<&CachedPhoto> {
+        if local { self.local.as_ref() } else { self.unsplash.as_ref() }
+    }
+}
+
 struct State {
     client: reqwest::Client,
     location: Option<Location>,
     weather: Option<Weather>,
     weather_due: Instant,
     precip: Option<Precip>,
-    photo: Option<CachedPhoto>,
+    shown: Shown,
+    /// The source the control panel was last told about.
+    announced_local: Option<bool>,
     photo_retry_at: Instant,
     unsplash_allowed_at: Instant,
-    /// The Unsplash photo set aside while the user's own photos are showing, so
-    /// switching back shows it at once instead of a dark screen until a fetch is allowed.
-    set_aside: Option<CachedPhoto>,
+    next_photo: Arc<AtomicBool>,
 }
 
 async fn run(
@@ -91,6 +117,7 @@ async fn run(
     photo_channel: PhotoChannel,
     wake: Arc<Notify>,
     latest: Arc<Mutex<Option<View>>>,
+    next_photo: Arc<AtomicBool>,
 ) {
     let mut state = State {
         client: reqwest::Client::builder()
@@ -101,14 +128,12 @@ async fn run(
         weather: None,
         weather_due: Instant::now(),
         precip: None,
-        photo: load_cached_photo(),
+        shown: load_shown(),
+        announced_local: None,
         photo_retry_at: Instant::now(),
         unsplash_allowed_at: Instant::now(),
-        set_aside: None,
+        next_photo,
     };
-    if let Some(cached) = &state.photo {
-        let _ = photo_channel.set(panel_photo(cached));
-    }
 
     loop {
         let settings = settings_manager::read_settings().unwrap_or_default();
@@ -151,25 +176,35 @@ impl State {
             }
         }
 
-        let max_age = (settings.photos.refresh_interval * 60) as i64;
         let local = settings.photos.local();
 
-        let showing_unsplash = self.photo.as_ref().is_some_and(|cached| cached.local_id.is_none());
-        if local && showing_unsplash {
-            self.set_aside = self.photo.take();
-        } else if !local && !showing_unsplash {
-            if let Some(cached) = self.set_aside.take() {
-                let _ = photo_channel.set(panel_photo(&cached));
-                self.photo = Some(cached);
-            }
+        // A deleted photo is no longer on screen.
+        let deleted = self
+            .shown
+            .local
+            .as_ref()
+            .and_then(|cached| cached.local_id.as_deref())
+            .is_some_and(|id| !library::photo_path(id).is_some_and(|path| path.exists()));
+        if deleted {
+            self.shown.local = None;
+            self.announced_local = None;
         }
 
-        let current = self.photo.as_ref().filter(|cached| match &cached.local_id {
-            // A deleted photo is no longer current.
-            Some(id) => local && library::photo_path(id).is_some_and(|path| path.exists()),
-            None => !local,
-        });
-        let stale = current.is_none_or(|cached| Utc::now().timestamp() - cached.fetched_at >= max_age);
+        // The panel follows the screen to whichever source is now showing.
+        if self.announced_local != Some(local) {
+            self.announced_local = Some(local);
+            announce(photo_channel, self.shown.get(local));
+        }
+
+        // Always consumed, so a request made in Unsplash mode cannot be saved up and
+        // spent later.
+        let next = self.next_photo.swap(false, Ordering::Relaxed) && local;
+        let max_age = (settings.photos.refresh_interval * 60) as i64;
+        let stale = next
+            || self
+                .shown
+                .get(local)
+                .is_none_or(|cached| Utc::now().timestamp() - cached.fetched_at >= max_age);
         if !stale {
             return;
         }
@@ -177,8 +212,8 @@ impl State {
         if local {
             // The user's own photos only. Unsplash is never contacted in this mode, and
             // an empty library leaves the screen dark rather than falling back to it.
-            let current_id = current.and_then(|cached| cached.local_id.clone());
-            self.photo = library::pick(current_id.as_deref()).and_then(|id| {
+            let current_id = self.shown.local.as_ref().and_then(|cached| cached.local_id.clone());
+            self.shown.local = library::pick(current_id.as_deref()).and_then(|id| {
                 let path = library::photo_path(&id)?;
                 Some(CachedPhoto {
                     photo: Photo { url: asset_url(&path), author: String::new(), author_url: String::new() },
@@ -187,13 +222,8 @@ impl State {
                     local_id: Some(id),
                 })
             });
-            match &self.photo {
-                Some(cached) => {
-                    save_cached_photo(cached);
-                    let _ = photo_channel.set(panel_photo(cached));
-                }
-                None => photo_channel.clear(),
-            }
+            save_shown(&self.shown);
+            announce(photo_channel, self.shown.local.as_ref());
             return;
         }
 
@@ -217,15 +247,14 @@ impl State {
                     photos::trigger_download(&client, &fetched.download_location).await;
                 });
 
-                let cached = CachedPhoto {
+                self.shown.unsplash = Some(CachedPhoto {
                     photo: fetched.photo,
                     query,
                     fetched_at: Utc::now().timestamp(),
                     local_id: None,
-                };
-                save_cached_photo(&cached);
-                let _ = photo_channel.set(panel_photo(&cached));
-                self.photo = Some(cached);
+                });
+                save_shown(&self.shown);
+                announce(photo_channel, self.shown.unsplash.as_ref());
             }
             Err(e) => {
                 // Keep showing the old photo.
@@ -233,6 +262,15 @@ impl State {
                 self.photo_retry_at = Instant::now() + PHOTO_RETRY;
             }
         }
+    }
+}
+
+fn announce(photo_channel: &PhotoChannel, cached: Option<&CachedPhoto>) {
+    match cached {
+        Some(cached) => {
+            let _ = photo_channel.set(panel_photo(cached));
+        }
+        None => photo_channel.clear(),
     }
 }
 
@@ -269,7 +307,7 @@ fn publish(app: &AppHandle, latest: &Mutex<Option<View>>, state: &State, setting
         &settings.display,
         state.location.as_ref().map(|location| location.label.as_str()),
         state.weather.as_ref(),
-        state.photo.as_ref().map(|cached| &cached.photo),
+        state.shown.get(settings.photos.local()).map(|cached| &cached.photo),
     );
 
     let Ok(mut last) = latest.lock() else { return };
@@ -390,20 +428,70 @@ fn cache_path() -> Option<std::path::PathBuf> {
         .map(|path| path.with_file_name("photo.json"))
 }
 
-fn load_cached_photo() -> Option<CachedPhoto> {
-    let content = std::fs::read_to_string(cache_path()?).ok()?;
-    serde_json::from_str(&content).ok()
+fn load_shown() -> Shown {
+    cache_path()
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .map(|content| parse_shown(&content))
+        .unwrap_or_default()
 }
 
-fn save_cached_photo(cached: &CachedPhoto) {
+fn parse_shown(content: &str) -> Shown {
+    // Older builds kept a single photo; file it under its source.
+    if let Ok(single) = serde_json::from_str::<CachedPhoto>(content) {
+        return if single.local_id.is_some() {
+            Shown { local: Some(single), ..Shown::default() }
+        } else {
+            Shown { unsplash: Some(single), ..Shown::default() }
+        };
+    }
+    serde_json::from_str(content).unwrap_or_default()
+}
+
+fn save_shown(shown: &Shown) {
     let Some(path) = cache_path() else { return };
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
-    let result = serde_json::to_string(cached)
+    let result = serde_json::to_string(shown)
         .map_err(|e| e.to_string())
         .and_then(|json| std::fs::write(&path, json).map_err(|e| e.to_string()));
     if let Err(e) = result {
         eprintln!("Could not cache the photo (it is still shown): {}", e);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const UNSPLASH: &str = r#"{"photo":{"url":"https://images.unsplash.com/a","author":"A","author_url":"https://unsplash.com/@a"},"query":"autumn","fetched_at":1}"#;
+    const LOCAL: &str = r#"{"photo":{"url":"asset://localhost/x","author":"","author_url":""},"query":"","fetched_at":2,"local_id":"0123456789abcdef"}"#;
+
+    #[test]
+    fn a_single_photo_from_an_older_build_is_filed_under_its_source() {
+        let shown = parse_shown(UNSPLASH);
+        assert_eq!(shown.unsplash.unwrap().query, "autumn");
+        assert!(shown.local.is_none());
+
+        let shown = parse_shown(LOCAL);
+        assert_eq!(shown.local.unwrap().local_id.as_deref(), Some("0123456789abcdef"));
+        assert!(shown.unsplash.is_none());
+    }
+
+    #[test]
+    fn both_sources_survive_a_restart() {
+        let saved = format!(r#"{{"unsplash":{UNSPLASH},"local":{LOCAL}}}"#);
+        let shown = parse_shown(&saved);
+        assert_eq!(shown.get(false).unwrap().fetched_at, 1);
+        assert_eq!(shown.get(true).unwrap().fetched_at, 2);
+
+        let round_trip = parse_shown(&serde_json::to_string(&shown).unwrap());
+        assert!(round_trip.unsplash.is_some() && round_trip.local.is_some());
+    }
+
+    #[test]
+    fn a_corrupt_cache_starts_empty() {
+        let shown = parse_shown("{ not json");
+        assert!(shown.unsplash.is_none() && shown.local.is_none());
     }
 }

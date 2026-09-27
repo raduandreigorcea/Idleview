@@ -313,6 +313,23 @@ async fn delete_photo(
     Ok(Json(json!({ "ok": true })))
 }
 
+/// POST /api/photos/next - show another of the user's own photos now.
+///
+/// Only in "My photos" mode, where it is a local file swap. There is deliberately no
+/// equivalent for Unsplash: that would let a client spend the photo quota on demand.
+async fn next_photo(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, AppError> {
+    authorize(&headers)?;
+    let settings = settings_manager::read_settings().map_err(AppError::internal)?;
+    if !settings.photos.local() {
+        return Err(AppError::new(StatusCode::CONFLICT, "Next photo only works with My photos"));
+    }
+    state.dashboard.next_photo();
+    Ok(Json(json!({ "ok": true })))
+}
+
 /// The screen re-checks its photo (a deleted one must go), and other open panels
 /// refresh their grid.
 fn photos_changed(state: &AppState) {
@@ -356,6 +373,7 @@ fn create_router(state: AppState, static_dir: PathBuf) -> Router {
                 .post(upload_photo)
                 .layer(DefaultBodyLimit::max(library::MAX_UPLOAD_BYTES)),
         )
+        .route("/photos/next", post(next_photo))
         .route("/photos/:id", axum::routing::delete(delete_photo))
         .route("/photos/:id/thumb", get(photo_thumb))
         .route("/auth/check", get(auth_check))

@@ -32,6 +32,8 @@ dirs = "5.0"
 rand = "0.8"
 # Uploaded photos: decode, honour the phone's rotation, downscale, re-encode (which also
 # drops EXIF, GPS included). Only the formats the upload accepts.
+# The pairing card's QR code (panel address with the token), rendered as SVG.
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 # HTTP server dependencies
 axum = "0.7"

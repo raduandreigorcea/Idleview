@@ -1,3 +1,6 @@
 [submodule "idleview-control"]
 	path = idleview-control
 	url = https://github.com/raduandreigorcea/Idleview-Control.git
+[submodule "web"]
+	path = web
+	url = https://github.com/raduandreigorcea/Idleview-Web.git

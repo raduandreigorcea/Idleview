@@ -1,0 +1,3 @@
+# Store and check out text as LF everywhere. Without this, Windows git (autocrlf) flags
+# files written by cargo, npm and editors as modified when nothing changed.
+* text=auto eol=lf

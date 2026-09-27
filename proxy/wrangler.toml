@@ -13,3 +13,9 @@ workers_dev = true
 name = "LIMITER"
 namespace_id = "1001"
 simple = { limit = 20, period = 60 }
+
+# idleview-core compiled to WebAssembly (src/core.js). Built before every deploy and
+# dev run; the .wasm is not committed.
+[build]
+command = "npm run build:core"
+

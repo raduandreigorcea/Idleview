@@ -4,9 +4,25 @@ version = "0.1.0"
 edition = "2021"
 description = "Idleview's display logic: no I/O, no clock reads, no Tauri"
 
+# rlib for the desktop app; cdylib for the WebAssembly build the photo Worker runs
+# (see src/wasm.rs).
+[lib]
+crate-type = ["rlib", "cdylib"]
+
 [dependencies]
 chrono = { version = "0.4", default-features = false, features = ["alloc", "serde"] }
 serde = { version = "1", features = ["derive"] }
 
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+serde_json = "1"
+
 [dev-dependencies]
 serde_json = "1"
+
+# Only used when core is built on its own, i.e. the WebAssembly build for the Worker,
+# where size is cold-start time. The desktop app has its own profile.
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+codegen-units = 1

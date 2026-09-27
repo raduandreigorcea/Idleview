@@ -6,15 +6,12 @@
   "scripts": {
     "tauri": "tauri",
     "test": "node scripts/test-all.mjs",
-    "test:app": "vitest run",
     "test:proxy": "npm --prefix proxy test",
     "test:control": "npm --prefix idleview-control test",
-    "test:watch": "vitest",
-    "test:rust": "cd src-tauri && cargo test"
+    "test:rust": "cd src-tauri && cargo test",
+    "test:web": "npm --prefix web test"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2",
-    "jsdom": "^24.0.0",
-    "vitest": "^4.1.7"
+    "@tauri-apps/cli": "^2"
   }
 }

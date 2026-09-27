@@ -1,0 +1,2 @@
+# Built from ../core by `npm run build:core`.
+src/idleview_core.wasm

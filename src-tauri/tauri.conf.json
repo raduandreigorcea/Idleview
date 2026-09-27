@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "identifier": "com.radua.idleview",
   "build": {
-    "frontendDist": "../src",
+    "frontendDist": "../web/page",
     "beforeDevCommand": "npm --prefix idleview-control install && npm --prefix idleview-control run build",
     "beforeBuildCommand": "npm --prefix idleview-control install && npm --prefix idleview-control run build"
   },

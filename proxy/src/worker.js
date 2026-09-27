@@ -21,7 +21,7 @@
 //   - A per-IP rate limit backs both up.
 //
 // It also serves the web version of the screen: the page itself (static assets from
-// ../src, see wrangler.toml) and GET /api/view, which returns the finished view for the
+// the Idleview-Web submodule, see wrangler.toml) and GET /api/view, which returns the finished view for the
 // visitor's location and local time. The view and the photo search are computed by
 // idleview-core, the same Rust as the desktop app, compiled to WebAssembly (core.js).
 // Visitors cannot choose a search, so the web adds no way to spend the quota.

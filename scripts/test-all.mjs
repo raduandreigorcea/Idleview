@@ -1,6 +1,6 @@
 // Runs every JS test suite in the repo.
 //
-// The three packages are deliberately not one package: the dashboard runs in a webview,
+// The three packages are deliberately not one package: the screen page runs in a webview,
 // the photo proxy runs on Cloudflare's workerd (no DOM), and the control panel is a Vue
 // app in its own repo. Each needs its own vitest environment, so each has its own config.
 //
@@ -16,8 +16,8 @@ import { fileURLToPath } from 'node:url'
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 
 const suites = [
-  // `test:app`, not `test` - calling the root's `test` script from here would recurse.
-  { name: 'dashboard', dir: root, script: 'test:app' },
+  // The screen page, in its own repo (the `web` submodule).
+  { name: 'screen page', dir: join(root, 'web'), script: 'test', optional: true },
   { name: 'photo proxy (worker)', dir: join(root, 'proxy'), script: 'test' },
   // Checked out by `git submodule update --init`. A clone without it is normal, but a
   // missing submodule must read as SKIPPED, never as a pass.

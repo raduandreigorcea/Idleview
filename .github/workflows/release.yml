@@ -32,9 +32,10 @@ jobs:
           targets: wasm32-unknown-unknown
       - name: Core logic (Rust)
         run: cargo test --manifest-path core/Cargo.toml
-      - name: Dashboard, photo proxy and control panel (JS)
+      - name: Screen page, photo proxy and control panel (JS)
         run: |
           npm ci
+          npm --prefix web ci
           npm --prefix proxy ci
           npm --prefix idleview-control ci
           npm test

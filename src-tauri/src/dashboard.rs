@@ -1,8 +1,8 @@
 //! Everything the screen does, except drawing.
 //!
 //! One task owns the schedule: location once, weather every 15 minutes (5 while rain or
-//! snow is starting or stopping), a photo every `refresh_interval`, and a clock tick on
-//! each minute. Whenever the result would look different it emits a finished
+//! snow is starting or stopping), a photo every `refresh_interval` (from Unsplash via
+//! the proxy, or from the user's own library), and a clock tick on each minute. Whenever the result would look different it emits a finished
 //! `idleview_core::View` as the `view` event. The webview only places text.
 
 use std::sync::{Arc, Mutex};
@@ -12,32 +12,32 @@ use chrono::{Local, NaiveDateTime, Timelike, Utc};
 use idleview_core::{Photo, Precip, View, Weather};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
-use tokio::sync::mpsc;
+use tokio::sync::Notify;
 
 use crate::http_server::PhotoChannel;
 use crate::settings_manager::{self, Settings};
-use crate::photos;
+use crate::{library, photos};
 
 const WEATHER_EVERY: Duration = Duration::from_secs(15 * 60);
 const WEATHER_WHILE_CHANGING: Duration = Duration::from_secs(5 * 60);
 /// After a failed photo fetch. The minute tick would otherwise hammer a proxy that is
 /// most likely failing because it is over quota.
 const PHOTO_RETRY: Duration = Duration::from_secs(5 * 60);
-
-pub enum Command {
-    SettingsChanged,
-}
+/// The most often Unsplash is ever asked, whatever the reason - schedule, switching the
+/// photo source back, or anything else a client can do.
+const UNSPLASH_MIN_GAP: Duration = Duration::from_secs(5 * 60);
 
 /// Handle to the running dashboard, managed as Tauri state.
 #[derive(Clone)]
 pub struct Dashboard {
-    commands: mpsc::UnboundedSender<Command>,
+    wake: Arc<Notify>,
     latest: Arc<Mutex<Option<View>>>,
 }
 
 impl Dashboard {
-    pub fn send(&self, command: Command) {
-        let _ = self.commands.send(command);
+    /// Something changed (settings, the photo library): re-check and redraw now.
+    pub fn wake(&self) {
+        self.wake.notify_one();
     }
 
     /// The last view emitted, for a webview that loads after the first emit.
@@ -47,10 +47,10 @@ impl Dashboard {
 }
 
 pub fn start(app: AppHandle, photo_channel: PhotoChannel) -> Dashboard {
-    let (commands, receiver) = mpsc::unbounded_channel();
+    let wake = Arc::new(Notify::new());
     let latest = Arc::new(Mutex::new(None));
-    tauri::async_runtime::spawn(run(app, photo_channel, receiver, latest.clone()));
-    Dashboard { commands, latest }
+    tauri::async_runtime::spawn(run(app, photo_channel, wake.clone(), latest.clone()));
+    Dashboard { wake, latest }
 }
 
 struct Location {
@@ -67,6 +67,9 @@ struct CachedPhoto {
     query: String,
     /// Unix seconds, so the age survives a restart.
     fetched_at: i64,
+    /// Set when the photo is one of the user's own, from `library`.
+    #[serde(default)]
+    local_id: Option<String>,
 }
 
 struct State {
@@ -77,12 +80,16 @@ struct State {
     precip: Option<Precip>,
     photo: Option<CachedPhoto>,
     photo_retry_at: Instant,
+    unsplash_allowed_at: Instant,
+    /// The Unsplash photo set aside while the user's own photos are showing, so
+    /// switching back shows it at once instead of a dark screen until a fetch is allowed.
+    set_aside: Option<CachedPhoto>,
 }
 
 async fn run(
     app: AppHandle,
     photo_channel: PhotoChannel,
-    mut commands: mpsc::UnboundedReceiver<Command>,
+    wake: Arc<Notify>,
     latest: Arc<Mutex<Option<View>>>,
 ) {
     let mut state = State {
@@ -96,9 +103,11 @@ async fn run(
         precip: None,
         photo: load_cached_photo(),
         photo_retry_at: Instant::now(),
+        unsplash_allowed_at: Instant::now(),
+        set_aside: None,
     };
     if let Some(cached) = &state.photo {
-        let _ = photo_channel.set(cached.photo.clone());
+        let _ = photo_channel.set(panel_photo(cached));
     }
 
     loop {
@@ -111,10 +120,7 @@ async fn run(
 
         tokio::select! {
             _ = tokio::time::sleep(until_next_minute()) => {}
-            command = commands.recv() => match command {
-                Some(Command::SettingsChanged) => {}
-                None => return,
-            },
+            _ = wake.notified() => {}
         }
     }
 }
@@ -146,44 +152,112 @@ impl State {
         }
 
         let max_age = (settings.photos.refresh_interval * 60) as i64;
-        let stale = self
-            .photo
-            .as_ref()
-            .is_none_or(|cached| Utc::now().timestamp() - cached.fetched_at >= max_age);
+        let local = settings.photos.local();
 
-        // Only ever on schedule. Nothing a client does - toggling a setting included -
-        // can make the screen fetch a photo early.
-        if stale && Instant::now() >= self.photo_retry_at {
-            let query = idleview_core::photo_query(
-                local_now(),
-                self.weather.as_ref(),
-                settings.photos.enable_festive_queries,
-            );
-            let (width, height) = screen_size(app);
-
-            match photos::fetch(&self.client, &query, width, height).await {
-                Ok(fetched) => {
-                    let client = self.client.clone();
-                    tauri::async_runtime::spawn(async move {
-                        photos::trigger_download(&client, &fetched.download_location).await;
-                    });
-
-                    let cached = CachedPhoto {
-                        photo: fetched.photo,
-                        query,
-                        fetched_at: Utc::now().timestamp(),
-                    };
-                    save_cached_photo(&cached);
-                    let _ = photo_channel.set(cached.photo.clone());
-                    self.photo = Some(cached);
-                }
-                Err(e) => {
-                    // Keep showing the old photo.
-                    eprintln!("Photo fetch failed for {:?}: {}", query, e);
-                    self.photo_retry_at = Instant::now() + PHOTO_RETRY;
-                }
+        let showing_unsplash = self.photo.as_ref().is_some_and(|cached| cached.local_id.is_none());
+        if local && showing_unsplash {
+            self.set_aside = self.photo.take();
+        } else if !local && !showing_unsplash {
+            if let Some(cached) = self.set_aside.take() {
+                let _ = photo_channel.set(panel_photo(&cached));
+                self.photo = Some(cached);
             }
         }
+
+        let current = self.photo.as_ref().filter(|cached| match &cached.local_id {
+            // A deleted photo is no longer current.
+            Some(id) => local && library::photo_path(id).is_some_and(|path| path.exists()),
+            None => !local,
+        });
+        let stale = current.is_none_or(|cached| Utc::now().timestamp() - cached.fetched_at >= max_age);
+        if !stale {
+            return;
+        }
+
+        if local {
+            // The user's own photos only. Unsplash is never contacted in this mode, and
+            // an empty library leaves the screen dark rather than falling back to it.
+            let current_id = current.and_then(|cached| cached.local_id.clone());
+            self.photo = library::pick(current_id.as_deref()).and_then(|id| {
+                let path = library::photo_path(&id)?;
+                Some(CachedPhoto {
+                    photo: Photo { url: asset_url(&path), author: String::new(), author_url: String::new() },
+                    query: String::new(),
+                    fetched_at: Utc::now().timestamp(),
+                    local_id: Some(id),
+                })
+            });
+            match &self.photo {
+                Some(cached) => {
+                    save_cached_photo(cached);
+                    let _ = photo_channel.set(panel_photo(cached));
+                }
+                None => photo_channel.clear(),
+            }
+            return;
+        }
+
+        let now = Instant::now();
+        if now < self.photo_retry_at || now < self.unsplash_allowed_at {
+            return;
+        }
+        self.unsplash_allowed_at = now + UNSPLASH_MIN_GAP;
+
+        let query = idleview_core::photo_query(
+            local_now(),
+            self.weather.as_ref(),
+            settings.photos.enable_festive_queries,
+        );
+        let (width, height) = screen_size(app);
+
+        match photos::fetch(&self.client, &query, width, height).await {
+            Ok(fetched) => {
+                let client = self.client.clone();
+                tauri::async_runtime::spawn(async move {
+                    photos::trigger_download(&client, &fetched.download_location).await;
+                });
+
+                let cached = CachedPhoto {
+                    photo: fetched.photo,
+                    query,
+                    fetched_at: Utc::now().timestamp(),
+                    local_id: None,
+                };
+                save_cached_photo(&cached);
+                let _ = photo_channel.set(panel_photo(&cached));
+                self.photo = Some(cached);
+            }
+            Err(e) => {
+                // Keep showing the old photo.
+                eprintln!("Photo fetch failed for {:?}: {}", query, e);
+                self.photo_retry_at = Instant::now() + PHOTO_RETRY;
+            }
+        }
+    }
+}
+
+/// What the control panel shows for the current photo. A local photo is given by its
+/// thumbnail URL on the panel's own server (token-gated), since the panel cannot read
+/// the screen's disk.
+fn panel_photo(cached: &CachedPhoto) -> Photo {
+    match &cached.local_id {
+        Some(id) => Photo {
+            url: format!("/api/photos/{id}/thumb"),
+            author: String::new(),
+            author_url: String::new(),
+        },
+        None => cached.photo.clone(),
+    }
+}
+
+/// A file URL the webview may load through Tauri's asset protocol (the scope is limited
+/// to the library directory in `lib.rs`). Same format as the JS `convertFileSrc`.
+fn asset_url(path: &std::path::Path) -> String {
+    let encoded = urlencoding::encode(&path.to_string_lossy()).into_owned();
+    if cfg!(windows) {
+        format!("http://asset.localhost/{encoded}")
+    } else {
+        format!("asset://localhost/{encoded}")
     }
 }
 

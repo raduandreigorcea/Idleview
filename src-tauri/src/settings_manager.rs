@@ -38,13 +38,22 @@ pub struct SecretSettings {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(default)]
 pub struct PhotosSettings {
+    /// "unsplash" or "local". Local means the user's own photos only - the photo
+    /// service is never contacted.
+    pub source: String,
     pub refresh_interval: u64, // minutes
     pub enable_festive_queries: bool,
 }
 
 impl Default for PhotosSettings {
     fn default() -> Self {
-        Self { refresh_interval: 30, enable_festive_queries: true }
+        Self { source: "unsplash".into(), refresh_interval: 30, enable_festive_queries: true }
+    }
+}
+
+impl PhotosSettings {
+    pub fn local(&self) -> bool {
+        self.source == "local"
     }
 }
 
@@ -56,6 +65,9 @@ pub const REFRESH_INTERVAL_MAX: u64 = 24 * 60;
 impl Settings {
     pub fn validate(&mut self) {
         self.units.validate();
+        if !matches!(self.photos.source.as_str(), "unsplash" | "local") {
+            self.photos.source = "unsplash".into();
+        }
         self.photos.refresh_interval = self
             .photos
             .refresh_interval
@@ -334,6 +346,14 @@ mod tests {
         settings.photos.refresh_interval = 999_999;
         settings.validate();
         assert_eq!(settings.photos.refresh_interval, REFRESH_INTERVAL_MAX);
+    }
+
+    #[test]
+    fn an_unknown_photo_source_falls_back_to_unsplash() {
+        let mut settings = Settings::default();
+        settings.photos.source = "ftp".into();
+        settings.validate();
+        assert_eq!(settings.photos.source, "unsplash");
     }
 
     #[test]

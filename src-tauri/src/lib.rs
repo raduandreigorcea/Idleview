@@ -2,6 +2,7 @@
 // in `dashboard`; the control panel's API lives in `http_server`. The webview only draws.
 pub mod dashboard;
 pub mod http_server;
+pub mod library;
 pub mod photos;
 pub mod settings_manager;
 
@@ -48,6 +49,12 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let handle = app.handle().clone();
+
+            // The webview may read the user's own photos from disk, and nothing else.
+            if let Ok(dir) = library::dir() {
+                let _ = std::fs::create_dir_all(&dir);
+                app.asset_protocol_scope().allow_directory(&dir, true)?;
+            }
 
             // One photo channel, so the control panel sees what the screen shows.
             let photos = http_server::PhotoChannel::new();

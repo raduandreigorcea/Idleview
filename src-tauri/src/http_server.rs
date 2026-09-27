@@ -1,6 +1,7 @@
 use axum::{
-    extract::State,
-    http::{HeaderMap, StatusCode},
+    body::Bytes,
+    extract::{DefaultBodyLimit, Path, State},
+    http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response, sse::{Event, KeepAlive, Sse}},
     routing::{get, post},
     Json, Router,
@@ -18,7 +19,8 @@ use tokio::sync::broadcast;
 use futures::stream::Stream;
 use async_stream::stream;
 
-use crate::dashboard::{Command, Dashboard};
+use crate::dashboard::Dashboard;
+use crate::library::{self, AddError};
 use crate::settings_manager::{self, Settings};
 use idleview_core::Photo;
 
@@ -66,6 +68,14 @@ impl PhotoChannel {
         Ok(())
     }
 
+    /// Nothing is showing (the user's own library is empty).
+    pub fn clear(&self) {
+        if let Ok(mut current) = self.current.lock() {
+            *current = None;
+        }
+        self.broadcast(&json!({ "type": "photo-updated", "photo": null }));
+    }
+
     pub fn subscribe(&self) -> broadcast::Receiver<String> {
         self.events.subscribe()
     }
@@ -100,6 +110,10 @@ pub struct AppError {
 impl AppError {
     fn internal(message: impl Into<String>) -> Self {
         Self { status: StatusCode::INTERNAL_SERVER_ERROR, message: message.into() }
+    }
+
+    fn new(status: StatusCode, message: impl Into<String>) -> Self {
+        Self { status, message: message.into() }
     }
 
     fn unauthorized() -> Self {
@@ -161,7 +175,7 @@ fn client_id(headers: &HeaderMap) -> Option<String> {
 ///
 /// The payload is the redacted view. Secrets must never reach an SSE subscriber.
 fn notify_settings_changed(state: &AppState, settings: &Settings, origin: Option<String>) {
-    state.dashboard.send(Command::SettingsChanged);
+    state.dashboard.wake();
     state.photos.broadcast(&json!({
         "type": "settings-updated",
         "settings": settings.redacted(),
@@ -234,6 +248,78 @@ async fn get_current_photo(
     state.photos.get().map(Json).map_err(AppError::internal)
 }
 
+// ===== The user's own photos =====
+//
+// Unlike settings, even reading these needs the token: they are personal photos, and the
+// screen only ever shows one at a time.
+
+/// GET /api/photos - ids of the photos in the library
+async fn list_photos(headers: HeaderMap) -> Result<Json<Vec<String>>, AppError> {
+    authorize(&headers)?;
+    Ok(Json(library::list()))
+}
+
+/// GET /api/photos/:id/thumb - a small JPEG for the panel's grid
+async fn photo_thumb(headers: HeaderMap, Path(id): Path<String>) -> Result<Response, AppError> {
+    authorize(&headers)?;
+    let path = library::thumb_path(&id).ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "No such photo"))?;
+    let bytes = tokio::fs::read(path)
+        .await
+        .map_err(|_| AppError::new(StatusCode::NOT_FOUND, "No such photo"))?;
+    Ok((
+        [(header::CONTENT_TYPE, "image/jpeg"), (header::CACHE_CONTROL, "private, max-age=86400")],
+        bytes,
+    )
+        .into_response())
+}
+
+/// POST /api/photos - body is one image file (JPEG, PNG or WebP)
+async fn upload_photo(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<serde_json::Value>, AppError> {
+    authorize(&headers)?;
+
+    // Decoding and resizing a 12 MP photo is CPU work; keep it off the async threads.
+    let id = tokio::task::spawn_blocking(move || library::add(&body))
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?
+        .map_err(|e| match e {
+            AddError::NotAnImage => AppError::new(StatusCode::BAD_REQUEST, "That file is not a JPEG, PNG or WebP image"),
+            AddError::Full => AppError::new(
+                StatusCode::CONFLICT,
+                format!("The library is full ({} photos). Remove some first.", library::MAX_PHOTOS),
+            ),
+            AddError::Storage(e) => AppError::internal(e),
+        })?;
+
+    info!("Photo added to the library");
+    photos_changed(&state);
+    Ok(Json(json!({ "id": id })))
+}
+
+/// DELETE /api/photos/:id
+async fn delete_photo(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    authorize(&headers)?;
+    if !library::remove(&id).map_err(AppError::internal)? {
+        return Err(AppError::new(StatusCode::NOT_FOUND, "No such photo"));
+    }
+    photos_changed(&state);
+    Ok(Json(json!({ "ok": true })))
+}
+
+/// The screen re-checks its photo (a deleted one must go), and other open panels
+/// refresh their grid.
+fn photos_changed(state: &AppState) {
+    state.dashboard.wake();
+    state.photos.broadcast(&json!({ "type": "photos-updated" }));
+}
+
 /// GET /api/events - Server-Sent Events stream for real-time updates
 async fn events_stream(
     State(state): State<AppState>,
@@ -264,6 +350,14 @@ fn create_router(state: AppState, static_dir: PathBuf) -> Router {
         )
         .route("/settings/reset", post(reset_settings))
         .route("/photo/current", get(get_current_photo))
+        .route(
+            "/photos",
+            get(list_photos)
+                .post(upload_photo)
+                .layer(DefaultBodyLimit::max(library::MAX_UPLOAD_BYTES)),
+        )
+        .route("/photos/:id", axum::routing::delete(delete_photo))
+        .route("/photos/:id/thumb", get(photo_thumb))
         .route("/auth/check", get(auth_check))
         .route("/events", get(events_stream))
         .route("/health", get(health_check));

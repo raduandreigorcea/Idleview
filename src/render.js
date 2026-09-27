@@ -24,6 +24,16 @@ function safeHttpUrl(value) {
     }
 }
 
+// Photos also come from disk: the user's own, through Tauri's asset protocol
+// (asset://localhost/... on macOS/Linux, http://asset.localhost/... on Windows).
+function safeImageUrl(value) {
+    try {
+        return new URL(value).protocol === 'asset:' ? value : safeHttpUrl(value);
+    } catch (e) {
+        return null;
+    }
+}
+
 function link(href, text) {
     const safe = safeHttpUrl(href);
     const el = document.createElement(safe ? 'a' : 'span');
@@ -41,7 +51,7 @@ let creditTimer = null;
 
 // Swap the background only once the new photo has loaded, so it never flashes blank.
 function showPhoto(photo) {
-    const url = safeHttpUrl(photo.url);
+    const url = safeImageUrl(photo.url);
     if (!url) return;
     shownPhotoUrl = photo.url;
 
@@ -50,7 +60,13 @@ function showPhoto(photo) {
         if (shownPhotoUrl !== photo.url) return; // a newer photo arrived meanwhile
         document.body.style.backgroundImage = `url("${url.replace(/"/g, '%22')}")`;
 
+        // The user's own photos carry no author, and need no credit.
         const credit = byId('photo-credit');
+        clearTimeout(creditTimer);
+        if (!photo.author) {
+            credit.classList.add('hidden');
+            return;
+        }
         credit.replaceChildren(
             'Photo by ',
             link(photo.author_url, photo.author || 'Unknown'),
@@ -58,7 +74,6 @@ function showPhoto(photo) {
             link('https://unsplash.com', 'Unsplash')
         );
         credit.classList.remove('hidden');
-        clearTimeout(creditTimer);
         creditTimer = setTimeout(() => credit.classList.add('hidden'), 10000);
     };
     img.src = url;
@@ -116,5 +131,12 @@ export function render(view) {
         setText(tile.querySelector('.metric-label'), w.precip_label);
     }
 
-    if (view.photo && view.photo.url !== shownPhotoUrl) showPhoto(view.photo);
+    if (view.photo && view.photo.url !== shownPhotoUrl) {
+        showPhoto(view.photo);
+    } else if (!view.photo && shownPhotoUrl) {
+        // "My photos" with an empty library: plain dark background, no stale photo.
+        shownPhotoUrl = null;
+        document.body.style.backgroundImage = '';
+        byId('photo-credit').classList.add('hidden');
+    }
 }

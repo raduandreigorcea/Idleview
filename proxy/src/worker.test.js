@@ -38,3 +38,88 @@ describe('download location allowlist', () => {
     expect(isUnsplashDownloadUrl('//api.unsplash.com/photos/x/download')).toBe(false)
   })
 })
+
+import worker from './worker.js'
+
+// Stand-ins for the Workers runtime: the edge cache and waitUntil.
+function runtime() {
+  const store = new Map()
+  globalThis.caches = {
+    default: {
+      match: async (req) => store.get(req.url)?.clone(),
+      put: async (req, res) => { store.set(req.url, res) }
+    }
+  }
+  const pending = []
+  return { ctx: { waitUntil: (p) => pending.push(p) }, settle: () => Promise.all(pending) }
+}
+
+function unsplashStub() {
+  const calls = []
+  globalThis.fetch = async (url) => {
+    calls.push(url)
+    const photos = Array.from({ length: 10 }, (_, i) => ({
+      urls: { regular: `https://images.unsplash.com/photo-${i}` },
+      user: { name: `Author ${i}`, links: { html: 'https://unsplash.com/@a' } },
+      links: { download_location: `https://api.unsplash.com/photos/p${i}/download` }
+    }))
+    return new Response(JSON.stringify(photos), { status: 200 })
+  }
+  return calls
+}
+
+const env = { UNSPLASH_ACCESS_KEY: 'SECRET-KEY' }
+const photoRequest = (query) =>
+  new Request(`https://proxy.test/api/photo?query=${encodeURIComponent(query)}`)
+
+describe('photo endpoint', () => {
+  it('refuses searches the app never makes, without touching Unsplash', async () => {
+    const { ctx } = runtime()
+    const calls = unsplashStub()
+
+    for (const query of ['cats', '', 'spring night OR anything', 'x'.repeat(500)]) {
+      const res = await worker.fetch(photoRequest(query), env, ctx)
+      expect(res.status).toBe(400)
+    }
+    expect(calls).toHaveLength(0)
+  })
+
+  it('serves many requests for one search from a single Unsplash call', async () => {
+    const { ctx, settle } = runtime()
+    const calls = unsplashStub()
+
+    const first = await worker.fetch(photoRequest('autumn rainy night'), env, ctx)
+    await settle()
+    for (let i = 0; i < 20; i++) {
+      const res = await worker.fetch(photoRequest('autumn rainy night'), env, ctx)
+      expect(res.status).toBe(200)
+    }
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toContain('count=10')
+    const photo = await first.json()
+    expect(photo.raw_url).toMatch(/^https:\/\/images\.unsplash\.com\//)
+    expect(photo).toHaveProperty('download_location')
+  })
+
+  it('never puts the key in a response', async () => {
+    const { ctx } = runtime()
+    unsplashStub()
+
+    for (const req of [photoRequest('summer'), new Request('https://proxy.test/api/health')]) {
+      const body = await (await worker.fetch(req, env, ctx)).text()
+      expect(body).not.toContain('SECRET-KEY')
+      expect(body).not.toMatch(/key/i)
+    }
+  })
+
+  it('turns away a caller over the rate limit', async () => {
+    const { ctx } = runtime()
+    const calls = unsplashStub()
+    const limited = { ...env, LIMITER: { limit: async () => ({ success: false }) } }
+
+    const res = await worker.fetch(photoRequest('summer'), limited, ctx)
+    expect(res.status).toBe(429)
+    expect(calls).toHaveLength(0)
+  })
+})

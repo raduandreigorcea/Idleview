@@ -6,3 +6,10 @@ workers_dev = true
 # The Unsplash key is NOT here. It is a secret, set once with:
 #   wrangler secret put UNSPLASH_ACCESS_KEY
 # Secrets are encrypted by Cloudflare and never stored in this file or the repo.
+
+# Per-IP backstop. A screen makes a few requests an hour, so 20 a minute leaves room
+# for a household of screens behind one router.
+[[ratelimits]]
+name = "LIMITER"
+namespace_id = "1001"
+simple = { limit = 20, period = 60 }

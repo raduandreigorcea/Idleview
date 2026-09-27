@@ -501,6 +501,44 @@ mod tests {
         assert_eq!(view.weather.unwrap().temperature, "0 °C");
     }
 
+    /// The photo Worker only accepts searches on its list (proxy/src/queries.json), which
+    /// is what stops anyone spending the Unsplash quota on arbitrary searches. This fails
+    /// if `photo_query` can produce a search the Worker would reject, or the list keeps
+    /// one nothing produces any more.
+    #[test]
+    fn the_worker_allowlist_is_exactly_what_photo_query_produces() {
+        use std::collections::BTreeSet;
+
+        let allowlist: BTreeSet<String> =
+            serde_json::from_str(include_str!("../../proxy/src/queries.json")).unwrap();
+
+        let mut conditions: Vec<Option<Weather>> = vec![None];
+        for (code, cloudcover) in [(0, 0.0), (0, 90.0), (61, 0.0), (71, 0.0)] {
+            let mut w = weather();
+            w.sunrise = None; // the clock bands cover dawn, day, dusk and night
+            w.sunset = None;
+            w.weathercode = code;
+            w.cloudcover = cloudcover;
+            conditions.push(Some(w));
+        }
+
+        let mut produced = BTreeSet::new();
+        let mut day = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+        while day.year() == 2026 {
+            for hour in [3, 6, 12, 19] {
+                let now = day.and_hms_opt(hour, 0, 0).unwrap();
+                for w in &conditions {
+                    for festive in [true, false] {
+                        produced.insert(photo_query(now, w.as_ref(), festive));
+                    }
+                }
+            }
+            day = day.succ_opt().unwrap();
+        }
+
+        assert_eq!(produced, allowlist);
+    }
+
     #[test]
     fn missing_sun_times_render_as_dashes() {
         let mut w = weather();
